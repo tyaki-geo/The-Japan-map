@@ -6,25 +6,31 @@
 ## コマンド
 
 ```
-npm run data:process   # data/raw の zip -> data/edited（加工）
+npm run data:process   # data/raw の zip -> data/edited（Rust の変換コード data/converter を実行）
 npm run dev            # data/edited -> public/data へ同期して開発サーバ
 npm run typecheck && npm test && npm run build
+cargo test --manifest-path data/converter/Cargo.toml                         # 変換コードのテスト
+cargo clippy --manifest-path data/converter/Cargo.toml --all-targets -- -D warnings
 ```
 
 ## リポジトリの運用
 
-- main はルールセット（`.github/protect-main.json`）で保護されている。直接 push せず、ブランチを切って PR を出す。レビューは CODEOWNERS（`@tyaki-geo`）
-- push は SSH の `tyaki` ホスト（`git@tyaki:tyaki-geo/The-Japan-map.git`）。gh CLI のアカウント（24-fuji）はこのリポジトリに読み取り権限しかない
+- main はルールセット（`.github/protect-main.json`）で保護されている。直接 push せず、ブランチを切って PR を出す。レビューは CODEOWNERS（`@tyaki-geo`）。PR 本文は `.github/pull_request_template.md` に沿って書く
+- 本人（`tyaki-geo`）の PR はレビューのしようがないので、ルールセットの例外（リポジトリ管理者、`bypass_mode: pull_request`）で通す。マージ画面で「Merge without waiting for requirements to be met (bypass rules)」にチェックを入れてマージする。例外は PR のマージ時だけで、main への直接 push は本人でもできない
+- push は SSH の `tyaki` ホスト（`git@tyaki:tyaki-geo/The-Japan-map.git`）
 - `data/raw/` は git 管理外（zip を置くだけ）。`data/edited/` はコミットする（Pages のビルドがこれを使う）
-- 依存パッケージは公開から2週間以上経った版を `--save-exact` で固定する
+- 依存パッケージ（npm / crate）は公開から2週間以上経った版を完全一致で固定する（npm は `--save-exact`、Cargo は `=x.y.z`）
 
 ## 構成
 
-- `scripts/process-data.ts` 加工パイプライン本体
-- `scripts/lib/fgd.ts` FG-GML の XML → GeoJSON 変換（緯度経度の入れ替えを含む）
-- `scripts/lib/towns.ts` 町・大字名の決め方（丁目の除去）
-- `scripts/lib/prefectures.ts` 都道府県コード → 名称
-- `src/types/index.ts` data/edited の型（スクリプトとアプリで共有）
+- `data/converter/` 変換コード（Rust）。`data/raw` → `data/edited`
+  - `src/main.rs` 処理の流れ（読み込み → 市区町村 → 町字の振り分け → 町・大字 → 全体表示用 → 書き出し）
+  - `src/fgd.rs` FG-GML の XML を読む（緯度経度の入れ替え、座標の整数化）
+  - `src/geom.rs` 図形の型と演算（和・内外判定・面積・代表点・丸め）
+  - `src/towns.rs` 町・大字の区域づくりと名前の決め方
+  - `src/simplify.rs` 境界を共有したままの簡略化
+  - `src/output.rs` GeoJSON / index.json の書き出し
+- `src/types/index.ts` data/edited の型（アプリ側）。変換コードの出力と一致させる
 - `src/map.ts` MapLibre の地図とレイヤ、`src/sidebar.ts` 一覧・検索・情報パネル
 - 出力形式の詳細は `data/README.md`
 
@@ -34,7 +40,8 @@ npm run typecheck && npm test && npm run build
 - 使う項目
   - `05` 行政区画: `AdmArea`（市区町村ポリゴン。**2次メッシュの縁で切れている**）、属性 `name` / `admCode` / `type`
   - `12` 町字界: `CommBdry`（境界**線**のみ）のうち type が `大字・町・丁目界` のもの、`CommPt`（大字・町・丁目の代表点、`name` / `admCode`）
-- 座標は JGD2024 緯度経度で、GML は「緯度 経度」の順。GeoJSON では [経度, 緯度] に入れ替える
+- 座標は JGD2024 緯度経度で、GML は「緯度 経度」の順。[経度, 緯度] に入れ替える
+- 座標は小数9桁。変換コードでは **1e-9 度単位の整数（i64）** で持つので誤差が出ず、別々に計算した図形でも同じ点は同じ値になる
 - 精度が違う: 行政区画は 1/25000 相当、町字界は 1/2500 相当。線の端が市区町村界にぴったり乗らない
 - `12` があるのは都市計画区域などの一部メッシュだけ。同じ市区町村でも町字データの無い範囲がある
 
@@ -42,42 +49,46 @@ npm run typecheck && npm test && npm run build
 
 ### 都道府県・市区町村
 
-1. 全メッシュの `AdmArea` を `admCode`（5桁の団体コード）ごとに mapshaper `-dissolve` で統合する。メッシュの縁の辺は両側で座標が一致するので、普通の dissolve で継ぎ目なく消える（dissolve2 は不要）
-2. 面積は mapshaper の `this.area`（球面上の面積、m²）から km² に直す。収録したメッシュの範囲内の値になる
-3. ラベル位置は `-points inner`
-4. 全体表示用は `-simplify interval=30 keep-shapes` で簡略化する。トポロジーを保つので隣の市区町村との間に隙間はできない
-5. 都道府県は団体コード上2桁で、簡略化済みの市区町村をさらに dissolve する
+1. 全メッシュの `AdmArea` を `admCode`（5桁の団体コード）ごとに和をとる（i_overlay、`keep_all_points` で頂点を落とさない）。メッシュの縁の辺は両側で座標が一致するので継ぎ目なく消える。頂点を落とさないので、隣の市区町村との境界の頂点列も両側で一致する
+2. 面積は球面上の面積（geo の Chamberlain-Duquette）を km² に直す。収録したメッシュの範囲内の値になる
+3. ラベル位置は geo の `interior_point`（図形の内側に入らなければ bbox の中心）
+4. 全体表示用は境界を共有したまま簡略化する（`simplify.rs`）
+   - 環を節点（3本以上の辺が集まる点）で区切って弧にし、同じ弧は一度だけ Douglas-Peucker（許容 30m）で簡略化する
+   - 節点の無い閉じた環（島など）は潰れないよう最低4点残す
+   - 面積 2,000m² 未満の小島・穴は除く（各市区町村の最大の部分は必ず残す）
+5. 都道府県は団体コード上2桁で、簡略化済みの市区町村の和をとる
 
 ### 町・大字（市区町村の1段下）
 
 町字界は線と点しかないので、区域を組み立ててから名前でまとめる。
 
-1. **線の振り分け**: 町字界線の頂点を、中央から順に見ていき、最初に入っていた市区町村に割り当てる。湾内など陸域ポリゴンの外にしか頂点が無い線は、端点を共有する割り当て済みの線と同じ市区町村にする（端点の座標が一致するものをたどり、変化がなくなるまで繰り返す）
+1. **線の振り分け**: 町字界線の頂点を、中央から順に見ていき、最初に入っていた市区町村に割り当てる。湾内など陸域ポリゴンの外にしか頂点が無い線は、端点を共有する割り当て済みの線と同じ市区町村にする（変化がなくなるまで繰り返す）
 2. **代表点の振り分け**: `admCode` で割り当てる。`00000` など該当しないコードは、点がどのポリゴンに入るかで決める
-3. **区域の組み立て**（市区町村ごと）: 町字界線と市区町村ポリゴンの外周線を1つのレイヤにして mapshaper `-polygons` で区域にし、`-clip` で市区町村ポリゴンの内側だけ残して `-explode`。gap-tolerance は指定しない（試した範囲で結果が変わらなかった）
-4. **名前付け**: 区域に入る代表点の名称から丁目番号だけを除いて名前にする（`townGroupName`）
-   - 除くのは末尾の `(数字|漢数字)丁目` だけ。正規表現 `/(?:[0-9０-９]+|[一二三四五六七八九十]+)丁目$/`
+3. **区域の組み立て**（市区町村ごと）: 市区町村ポリゴンを町字界線で切り分ける（i_overlay の `slice_by_paths`）
+   - 他の線とつながっていない線端は、線の向きに 1m 延ばしてから切る。町字界線は市区町村界や他の線の 1cm 未満手前で止まっていることが多く、整数座標で厳密に計算すると切れないため。突き出た部分は行き止まりになるだけで区域には影響しない
+4. **名前付け**: 区域に入る代表点の名称から丁目番号だけを除いて名前にする（`town_group_name`）
+   - 除くのは末尾の「(数字|漢数字)丁目」だけ（半角・全角数字、一〜十）
    - 例: 枝松一丁目 → 枝松、別当５丁目 → 別当
    - **甲・乙・丙や東西南北、本町・新町などはそのまま残す**（朝倉甲・朝倉乙は別の区域、余戸中・余戸南も別）。これはユーザーの方針
-   - 1つの区域に複数の名前が入っていたら最も多いものにする。同数なら先に出たもの（`pickGroupName`）
-5. **統合**: 同じ名前の区域を `-dissolve fields=name sum-fields=count` でまとめる。名前の位置は `-points inner`
+   - 1つの区域に複数の名前が入っていたら最も多いものにする。同数なら先に出たもの（`pick_group_name`）
+5. **統合**: 同じ名前の区域の和をとる。名前の位置は `interior_point`
 6. 代表点を含まない区域（町字データの無い範囲、精度差による細片）は出力しない
 
-結果（愛媛・高知とその周辺のテストデータ）: 代表点1927件 → 1023区域、区域に入らなかった代表点は1件。
+結果（愛媛・高知とその周辺のテストデータ、265 zip）: 代表点1927件 → 1036区域、区域に入らなかった代表点は1件、市区町村に振り分けられなかった町字界線は2本。処理時間は約2秒（16スレッドの環境）。
 
 ### 分かっている限界
 
-- 元データで境界線が1本欠けていると、隣の町と1つの区域になる（例: 松山市の三津三丁目が「三津ふ頭」の区域に入る）
+- 元データで境界線が欠けていると、隣の町と1つの区域になる（例: 松山市の三津三丁目が「三津ふ頭」の区域に入る）
 - 町字データが無い範囲（例: 松山市の中島など）は町・大字の区域が無い
 
 ## 実装上の注意（ハマりどころ）
 
-- mapshaper
-  - `-dissolve name` と書くと `name` がオプションとして解釈される。項目名は `fields=name` と明示する
-  - 属性の無いレイヤを GeoJSON 出力すると GeometryCollection になる。`geojson-type=FeatureCollection` を付ける
-  - `-clip` の後は geometry が null の地物が混ざるので読み込み側で除く
-  - `-dissolve` で作ったレイヤは名前が引き継がれないので、後で `target=` で使うなら `name=` を付ける
-  - mapshaper には型定義が無いので `scripts/mapshaper.d.ts` で宣言している
+- i_overlay（図形演算）
+  - 浮動小数の API は呼び出しごとに整数への変換の基準点が変わり、別々の計算結果で座標がずれうる。整数 API（`Overlay<i64>`、`IntSlice`）を使う
+  - 既定のオプションは同一直線上の頂点を落とす。隣の図形と境界をそろえたい和には `IntOverlayOptions::keep_all_points()`
+  - 出力の外周は反時計回り、穴は時計回りで、始点は末尾に繰り返さない（GeoJSON に書くとき閉じる）
+- quick-xml 0.42: 実体参照（`&amp;` など）は `Event::GeneralRef` として別に来る。テキストは自分でつなぐ
+- `<pos>` は地物直下（gml:Point を包む要素）と gml:pos の2か所に出てくる。深さで区別する
 - MapLibre GL v6
   - Vite でバンドルすると Worker の URL が解決できず地図が出ない。`maplibre-gl/dist/maplibre-gl-worker.mjs?url` を `setWorkerUrl` に渡している
   - スタイルの `glyphs` を省略し、ブラウザのフォントで文字を描いている（外部フォントサーバ不要）
@@ -86,9 +97,8 @@ npm run typecheck && npm test && npm run build
 
 ## 全国データに広げるときの検討事項
 
-今は全データを1回で読み、全 `AdmArea` を1つの GeoJSON 文字列にして mapshaper に渡している。テストデータ（265 zip、約19MB）で約20秒、出力は約28MB。全国では次の点が問題になりうる。
+今は全データを読み込んでから処理している（zip ごとの読み込み、市区町村ごとの和・町・大字づくりは rayon で並列）。テストデータで約2秒、出力は約27MB。
 
-- メモリと時間: 全 `AdmArea` を1つにまとめると巨大になる。都道府県ごと（団体コード上2桁）に分けて処理し、都道府県界をまたぐ統合だけ最後に行う形が候補。ただし1つの2次メッシュに複数の都道府県が入るので、メッシュ単位では分けられない
+- メモリ: 全地物を一度にメモリに載せている。全国で足りなければ、都道府県（団体コード上2桁）ごとに処理して都道府県界をまたぐ統合だけ最後に行う。ただし1つの2次メッシュに複数の都道府県が入るので、メッシュ単位では分けられない
 - 出力サイズ: GitHub Pages の公開サイトは 1GB まで、git の1ファイルは 100MB まで。全体表示用の `municipalities.geojson` を1ファイルで配るのは重くなるので、ベクトルタイル（PMTiles など）や都道府県ごとの分割を検討する
-- `data/edited` をコミットし続けるとリポジトリが肥大化する。Actions 側で加工する、別の置き場を使う、なども選択肢
-- 町・大字の組み立ては市区町村ごとに独立しているので、並列化しやすい
+- `data/edited` をコミットし続けるとリポジトリが肥大化する。Actions 側で変換する、別の置き場を使う、なども選択肢

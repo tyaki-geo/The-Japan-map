@@ -18,3 +18,15 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+
+  # data/raw -> data/edited の変換コード（Rust）
+  converter:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: data/converter
+    steps:
+      - uses: actions/checkout@v4
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      - run: cargo test --locked

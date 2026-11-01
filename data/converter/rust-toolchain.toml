@@ -1,0 +1,4 @@
+# 手元と CI で同じ版を使う（新しい clippy の指摘で CI が突然落ちないように）
+[toolchain]
+channel = "1.95.0"
+components = ["clippy", "rustfmt"]

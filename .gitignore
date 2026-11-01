@@ -8,3 +8,6 @@ public/data/
 # 元データ（基盤地図情報の zip など）は容量が大きいためコミットしない
 data/raw/*
 !data/raw/.gitkeep
+
+# Rust のビルド成果物
+data/converter/target/

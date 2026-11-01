@@ -13,8 +13,8 @@ TypeScript + Vite の Web アプリ。国土地理院の基盤地図情報（行
 データの形式は [data/README.md](data/README.md) を参照。
 
 ## 構成
-- `data/raw` 元データ / `data/edited` 加工済みデータ
-- `scripts/` データ加工スクリプト (tsx)
+- `data/raw` 元データ / `data/edited` 加工済みデータ / `data/converter` 変換コード (Rust)
+- `scripts/` 補助スクリプト (tsx。data/edited を public/data へコピー)
 - `src/` アプリ本体 (`lib/` ロジック, `types/` 型)
 - `tests/` テスト (vitest)
 - `docs/` 仕様メモ
@@ -23,8 +23,11 @@ TypeScript + Vite の Web アプリ。国土地理院の基盤地図情報（行
 ## コマンド
 ```
 npm install
-npm run data:process   # data/raw の zip -> data/edited
+npm run data:process   # data/raw の zip -> data/edited（Rust が必要）
 npm run dev
 npm test
 npm run build
+cargo test --manifest-path data/converter/Cargo.toml
 ```
+
+開発の進め方・地区割の方法は [CLAUDE.md](CLAUDE.md) を参照。

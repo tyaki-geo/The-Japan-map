@@ -1,4 +1,4 @@
-// data/edited の形式（scripts/process-data.ts が生成し、アプリが読み込む）
+// data/edited の形式（data/converter が生成し、アプリが読み込む）
 
 /** [west, south, east, north] */
 export type BBox = [number, number, number, number];
