@@ -16,6 +16,7 @@ cargo clippy --manifest-path data/converter/Cargo.toml --all-targets -- -D warni
 ## リポジトリの運用
 
 - main はルールセット（`.github/protect-main.json`）で保護されている。直接 push せず、ブランチを切って PR を出す。レビューは CODEOWNERS（`@tyaki-geo`）。PR 本文は `.github/pull_request_template.md` に沿って書く
+- 本人（`tyaki-geo`）の PR はレビューのしようがないので、ルールセットの例外（リポジトリ管理者、`bypass_mode: pull_request`）で通す。マージ画面で「Merge without waiting for requirements to be met (bypass rules)」にチェックを入れてマージする。例外は PR のマージ時だけで、main への直接 push は本人でもできない
 - push は SSH の `tyaki` ホスト（`git@tyaki:tyaki-geo/The-Japan-map.git`）
 - `data/raw/` は git 管理外（zip を置くだけ）。`data/edited/` はコミットする（Pages のビルドがこれを使う）
 - 依存パッケージ（npm / crate）は公開から2週間以上経った版を完全一致で固定する（npm は `--save-exact`、Cargo は `=x.y.z`）
