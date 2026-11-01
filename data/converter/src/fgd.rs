@@ -86,7 +86,8 @@ fn parse_pos_list(text: &str) -> Result<Vec<Pt>> {
     if nums.len() % 2 != 0 {
         bail!("座標の数が奇数です");
     }
-    Ok(nums.chunks_exact(2).map(|c| Pt::new(c[1], c[0])).collect())
+    let (pairs, _) = nums.as_chunks::<2>();
+    Ok(pairs.iter().map(|[lat, lon]| Pt::new(*lon, *lat)).collect())
 }
 
 /// 連続する曲線の継ぎ目（同一点）を重複させずにつなぐ
