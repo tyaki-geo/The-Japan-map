@@ -4,3 +4,7 @@ public/data/
 *.log
 .DS_Store
 .env
+
+# 元データ（基盤地図情報の zip など）は容量が大きいためコミットしない
+data/raw/*
+!data/raw/.gitkeep

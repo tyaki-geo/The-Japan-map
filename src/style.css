@@ -1,0 +1,216 @@
+:root {
+  --bg: #ffffff;
+  --fg: #1f2328;
+  --muted: #656d76;
+  --border: #d0d7de;
+  --hover: #f3f4f6;
+  --accent: #d35400;
+  --accent-bg: #fdf0e6;
+  font-family: system-ui, -apple-system, "Hiragino Sans", "Noto Sans JP", "Yu Gothic UI", sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+#app {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  height: 100vh;
+  height: 100dvh;
+}
+
+#app.error {
+  display: block;
+  padding: 24px;
+}
+
+.map {
+  position: relative;
+  min-height: 0;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.sidebar h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.summary,
+.hint,
+.empty {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sidebar input[type="search"] {
+  width: 100%;
+  padding: 8px 10px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.info {
+  /* 一覧をスクロールしても選択中の情報が見えるよう上部に固定 */
+  position: sticky;
+  top: -16px;
+  z-index: 1;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--accent-bg);
+}
+
+.info:has(.hint) {
+  position: static;
+  background: var(--bg);
+}
+
+.info h2 {
+  margin: 0 0 8px;
+  font-size: 18px;
+}
+
+.info h2 small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: normal;
+}
+
+.info dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.info dt {
+  color: var(--muted);
+}
+
+.info dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.pref-list {
+  flex: 1;
+}
+
+.pref-list details {
+  border-bottom: 1px solid var(--border);
+}
+
+.pref-list summary {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pref-list summary small {
+  color: var(--muted);
+  font-weight: normal;
+}
+
+.pref-list .fit {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.pref-list ul {
+  margin: 0 0 8px;
+  padding: 0;
+  list-style: none;
+}
+
+.pref-list li button {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  padding: 5px 8px;
+  font: inherit;
+  font-size: 14px;
+  text-align: left;
+  border: 0;
+  border-radius: 4px;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+.pref-list li button small {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.pref-list li button:hover {
+  background: var(--hover);
+}
+
+.pref-list li button.active {
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.layers {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.layers label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 2px 0;
+}
+
+@media (max-width: 720px) {
+  #app {
+    grid-template-columns: 1fr;
+    grid-template-rows: 55% 45%;
+  }
+
+  .map {
+    grid-row: 1;
+  }
+
+  .sidebar {
+    grid-row: 2;
+    border-right: 0;
+    border-top: 1px solid var(--border);
+  }
+}
