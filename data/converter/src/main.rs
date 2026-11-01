@@ -29,6 +29,10 @@ use towns::{TownArea, TownPoint, build_town_areas};
 const TOWN_BOUNDARY_TYPE: &str = "大字・町・丁目界";
 /// 全体表示用の簡略化の許容距離 [m]
 const OVERVIEW_TOLERANCE_M: f64 = 30.0;
+/// 名前の無い市区町村の表示名
+const NAMELESS_LABEL: &str = "（名称なし）";
+/// 名前の無い市区町村で、これより小さいものは細片とみなして除く [m²]
+const NAMELESS_MIN_AREA_M2: f64 = 10_000.0;
 /// 全体表示用で除く小島・穴の面積 [m²]（約45m四方）
 const OVERVIEW_MIN_PART_M2: f64 = 2_000.0;
 
@@ -138,9 +142,12 @@ fn main() -> Result<()> {
         match (f.kind.as_str(), f.geometry) {
             ("AdmArea", Geometry::Polygon(mp)) => {
                 if let Some(code) = f.adm_code {
-                    let entry = pieces
-                        .entry(code)
-                        .or_insert_with(|| (f.name.unwrap_or_default(), f.type_, Vec::new()));
+                    let entry = pieces.entry(code).or_default();
+                    // 名前の無い細片が先に来ることがあるので、空でない名前・種別を優先する
+                    if entry.0.is_empty() {
+                        entry.0 = f.name.unwrap_or_default();
+                        entry.1 = f.type_;
+                    }
                     entry.2.extend(mp);
                 }
             }
@@ -175,6 +182,19 @@ fn main() -> Result<()> {
         .filter_map(|(code, (name, type_, polys))| {
             let geometry = union(&polys, true);
             let bbox = BBox::of_multi(&geometry)?;
+            if name.is_empty() {
+                let area = geom::area_m2(&geometry);
+                if area < NAMELESS_MIN_AREA_M2 {
+                    eprintln!("skip (名前が無く {area:.0}m² の細片): {code}");
+                    return None;
+                }
+                eprintln!("warning: 名前の無い市区町村 {code}（{area:.0}m²）");
+            }
+            let name = if name.is_empty() {
+                NAMELESS_LABEL.to_string()
+            } else {
+                name
+            };
             let pref_code = code[..2].to_string();
             Some(Municipality {
                 pref_name: prefectures::prefecture_name(&pref_code),
