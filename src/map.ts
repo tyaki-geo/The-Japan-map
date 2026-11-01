@@ -15,9 +15,9 @@ const EMPTY: FeatureCollection = { type: "FeatureCollection", features: [] };
 const PREF_COLORS = ["#4e79a7", "#f28e2b", "#59a14f", "#b07aa1", "#e15759", "#76b7b2", "#edc948", "#9c755f"];
 
 export const LAYER_GROUPS = {
-  basemap: ["gsi-pale"],
+  basemap: ["gsi-blank"],
   municipalities: ["muni-fill", "muni-line", "pref-line"],
-  towns: ["towns-line", "towns-point"],
+  towns: ["towns-fill", "towns-line"],
   labels: ["muni-label", "towns-label"],
 } as const;
 export type LayerGroup = keyof typeof LAYER_GROUPS;
@@ -70,11 +70,13 @@ export function createMap(
     style: {
       version: 8,
       sources: {
-        "gsi-pale": {
+        // 地理院タイル「白地図」（ズーム14まで。以降は拡大表示）
+        "gsi-blank": {
           type: "raster",
-          tiles: ["https://cyberjapandata.gsi.go.jp/xyz/pale/{z}/{x}/{y}.png"],
+          tiles: ["https://cyberjapandata.gsi.go.jp/xyz/blank/{z}/{x}/{y}.png"],
           tileSize: 256,
-          maxzoom: 18,
+          minzoom: 5,
+          maxzoom: 14,
           attribution:
             '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a> / 基盤地図情報（国土地理院）を加工して作成',
         },
@@ -82,10 +84,10 @@ export function createMap(
         municipalities: { type: "geojson", data: dataUrl("municipalities.geojson"), promoteId: "code" },
         "muni-labels": { type: "geojson", data: labelPoints },
         selected: { type: "geojson", data: EMPTY },
-        towns: { type: "geojson", data: EMPTY },
+        towns: { type: "geojson", data: EMPTY, generateId: true },
       },
       layers: [
-        { id: "gsi-pale", type: "raster", source: "gsi-pale" },
+        { id: "gsi-blank", type: "raster", source: "gsi-blank" },
         {
           id: "muni-fill",
           type: "fill",
@@ -95,7 +97,7 @@ export function createMap(
             "fill-opacity": [
               "case",
               ["boolean", ["feature-state", "selected"], false],
-              0.5,
+              0.35,
               ["boolean", ["feature-state", "hover"], false],
               0.4,
               0.18,
@@ -115,18 +117,22 @@ export function createMap(
           paint: { "line-color": "#222", "line-width": ["interpolate", ["linear"], ["zoom"], 7, 1.2, 12, 3] },
         },
         {
+          // 透明の塗りで町・大字のホバー判定とハイライトを行う
+          id: "towns-fill",
+          type: "fill",
+          source: "towns",
+          filter: ["==", ["get", "kind"], "area"],
+          paint: {
+            "fill-color": "#c0392b",
+            "fill-opacity": ["case", ["boolean", ["feature-state", "hover"], false], 0.2, 0],
+          },
+        },
+        {
           id: "towns-line",
           type: "line",
           source: "towns",
-          filter: ["==", ["geometry-type"], "LineString"],
-          paint: { "line-color": "#c0392b", "line-width": 1, "line-dasharray": [3, 2] },
-        },
-        {
-          id: "towns-point",
-          type: "circle",
-          source: "towns",
-          filter: ["==", ["geometry-type"], "Point"],
-          paint: { "circle-radius": 3, "circle-color": "#c0392b", "circle-stroke-color": "#fff", "circle-stroke-width": 1 },
+          filter: ["==", ["get", "kind"], "area"],
+          paint: { "line-color": "#c0392b", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.6, 14, 1.5] },
         },
         {
           id: "selected-line",
@@ -138,14 +144,12 @@ export function createMap(
           id: "towns-label",
           type: "symbol",
           source: "towns",
-          minzoom: 12,
-          filter: ["==", ["geometry-type"], "Point"],
+          minzoom: 11,
+          filter: ["==", ["get", "kind"], "label"],
           layout: {
             "text-field": ["get", "name"],
             "text-font": ["sans-serif"],
             "text-size": 12,
-            "text-offset": [0, 0.9],
-            "text-anchor": "top",
           },
           paint: { "text-color": "#7b241c", "text-halo-color": "#fff", "text-halo-width": 1.5 },
         },
@@ -168,10 +172,17 @@ export function createMap(
 
   const popup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 8 });
   let hovered: string | null = null;
+  let hoveredTown: string | number | null = null;
   let selected: string | null = null;
 
   const setState = (code: string | null, state: Record<string, boolean>) => {
     if (code) map.setFeatureState({ source: "municipalities", id: code }, state);
+  };
+  const setHoveredTown = (id: string | number | null) => {
+    if (id === hoveredTown) return;
+    if (hoveredTown !== null) map.setFeatureState({ source: "towns", id: hoveredTown }, { hover: false });
+    hoveredTown = id;
+    if (id !== null) map.setFeatureState({ source: "towns", id }, { hover: true });
   };
 
   map.on("mousemove", "muni-fill", (e: MapLayerMouseEvent) => {
@@ -183,11 +194,18 @@ export function createMap(
       hovered = code;
       setState(hovered, { hover: true });
     }
+    // 選択中の市区町村では町・大字名も表示する
+    const town = map.getLayoutProperty("towns-fill", "visibility") === "none"
+      ? undefined
+      : map.queryRenderedFeatures(e.point, { layers: ["towns-fill"] })[0];
+    setHoveredTown(town?.id ?? null);
     map.getCanvas().style.cursor = "pointer";
-    popup.setLngLat(e.lngLat).setText(`${f.properties.prefName} ${f.properties.name}`).addTo(map);
+    const label = [f.properties.prefName, f.properties.name, town?.properties.name].filter(Boolean).join(" ");
+    popup.setLngLat(e.lngLat).setText(label).addTo(map);
   });
   map.on("mouseleave", "muni-fill", () => {
     setState(hovered, { hover: false });
+    setHoveredTown(null);
     hovered = null;
     map.getCanvas().style.cursor = "";
     popup.remove();
@@ -209,6 +227,7 @@ export function createMap(
 
       const selectedSrc = map.getSource<GeoJSONSource>("selected")!;
       const townsSrc = map.getSource<GeoJSONSource>("towns")!;
+      hoveredTown = null; // setData で地物 ID が振り直されるため
       selectedSrc.setData(m ? dataUrl(`${m.dir}/boundary.geojson`) : EMPTY);
       townsSrc.setData(m?.hasTowns ? dataUrl(`${m.dir}/towns.geojson`) : EMPTY);
       if (m && opts.fit !== false) fitBBox(m.bbox);

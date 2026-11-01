@@ -17,9 +17,9 @@ function h<K extends keyof HTMLElementTagNameMap>(
 }
 
 const LAYER_LABELS: Record<LayerGroup, string> = {
-  basemap: "背景地図（地理院タイル）",
+  basemap: "背景地図（地理院 白地図）",
   municipalities: "都道府県・市区町村界",
-  towns: "町字界・代表点（選択時）",
+  towns: "町・大字の区域（選択時）",
   labels: "名称ラベル",
 };
 
@@ -118,7 +118,7 @@ export function createSidebar(root: HTMLElement, index: DatasetIndex, handlers: 
         ...row("団体コード", m.code),
         ...row("種別", m.type),
         ...row("面積", `${m.areaKm2.toLocaleString("ja-JP")} km²（収録範囲内）`),
-        ...row("大字・町・丁目", m.hasTowns ? `${m.townCount} 件` : "データなし"),
+        ...row("町・大字", m.hasTowns ? `${m.townCount} 件` : "データなし"),
         ...row("データ", h("span", {}, link("boundary.geojson"), m.hasTowns && " ", m.hasTowns && link("towns.geojson"))),
       ),
     );

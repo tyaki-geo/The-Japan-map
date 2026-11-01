@@ -4,6 +4,9 @@
 //   05 行政区画 : AdmArea（2次メッシュで分割された市区町村ポリゴン）
 //   12 町字界   : CommBdry（町字界線）, CommPt（大字・町・丁目の代表点）
 // 出力: data/README.md を参照
+//
+// 町字界は線と代表点しかないため、線と市区町村界から区域を組み立て、代表点の名称で
+// 「丁目」を除いたまとまり（町・大字）ごとに統合する
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
@@ -13,6 +16,7 @@ import booleanPointInPolygon from "@turf/boolean-point-in-polygon";
 import type { Feature, FeatureCollection, LineString, MultiPolygon, Point, Polygon, Position } from "geojson";
 import { parseArchiveName, parseFgdXml, type FgdArchiveName } from "./lib/fgd";
 import { prefectureName } from "./lib/prefectures";
+import { pickGroupName } from "./lib/towns";
 import type {
   BBox,
   DatasetIndex,
@@ -31,6 +35,8 @@ const TOWN_BOUNDARY_TYPE = "大字・町・丁目界";
 
 type Archive = FgdArchiveName & { file: string };
 type MuniFeature = Feature<Polygon | MultiPolygon, MunicipalityProps>;
+type TownLine = Feature<LineString, { type: string }>;
+type TownPoint = Feature<Point, { name: string }>;
 
 async function findArchives(dir: string): Promise<Archive[]> {
   const entries = await readdir(dir, { recursive: true, withFileTypes: true });
@@ -96,6 +102,64 @@ function featureCollection<F extends Feature>(features: F[]): FeatureCollection 
   return { type: "FeatureCollection", features };
 }
 
+/**
+ * 町字界線と市区町村界から区域を作り、代表点の名称（丁目を除く）で統合する。
+ * 代表点を含まない区域（町字データの無い範囲や境界のずれによる細片）は捨てる。
+ */
+async function buildTownAreas(boundary: MuniFeature, lines: TownLine[], points: TownPoint[]) {
+  const polygonized = await mapshaper.applyCommands(
+    [
+      "-i lines.json boundary.json combine-files",
+      "-lines target=boundary",
+      "-merge-layers target=lines,boundary force name=net",
+      "-polygons",
+      "-clip boundary.json",
+      "-explode",
+      "-o areas.json format=geojson geojson-type=FeatureCollection precision=0.000001",
+    ].join(" "),
+    {
+      "lines.json": JSON.stringify(featureCollection(lines)),
+      "boundary.json": JSON.stringify(featureCollection([boundary])),
+    },
+  );
+  const areas = (JSON.parse(String(polygonized["areas.json"])) as FeatureCollection<Polygon>).features;
+
+  const named: Feature<Polygon, { name: string; count: number }>[] = [];
+  for (const area of areas) {
+    if (!area.geometry) continue; // クリップで空になった区域
+    const bbox = computeBBox(area.geometry.coordinates.flat());
+    const names = points
+      .filter((p) => inBBox(p.geometry.coordinates, bbox) && booleanPointInPolygon(p.geometry, area.geometry))
+      .map((p) => p.properties.name);
+    const name = pickGroupName(names);
+    if (name) named.push({ type: "Feature", properties: { name, count: names.length }, geometry: area.geometry });
+  }
+  if (named.length === 0) return [];
+
+  const grouped = await mapshaper.applyCommands(
+    [
+      "-i areas.json name=areas",
+      "-dissolve fields=name sum-fields=count name=areas",
+      "-o grouped.json format=geojson precision=0.000001",
+      "-points inner + name=labels target=areas",
+      "-o labels.json target=labels format=geojson precision=0.000001",
+    ].join(" "),
+    { "areas.json": JSON.stringify(featureCollection(named)) },
+  );
+  const parse = (name: string) =>
+    (JSON.parse(String(grouped[name])) as FeatureCollection<Polygon | MultiPolygon | Point, { name: string; count: number }>)
+      .features;
+
+  const result: Feature<Polygon | MultiPolygon | Point, TownProps>[] = [
+    ...parse("grouped.json").map((f) => ({
+      ...f,
+      properties: { kind: "area" as const, name: f.properties.name, count: f.properties.count },
+    })),
+    ...parse("labels.json").map((f) => ({ ...f, properties: { kind: "label" as const, name: f.properties.name } })),
+  ];
+  return result;
+}
+
 // ---- 読み込み ----
 const archives = await findArchives(rawDir);
 if (archives.length === 0) {
@@ -104,8 +168,8 @@ if (archives.length === 0) {
 }
 
 const pieces: MuniFeature[] = [];
-const townLines: Feature<LineString, TownProps>[] = [];
-const townPoints: { feature: Feature<Point, TownProps>; admCode?: string }[] = [];
+const townLines: TownLine[] = [];
+const townPoints: { feature: TownPoint; admCode?: string }[] = [];
 
 for (const archive of archives) {
   for (const f of await readArchive(archive.file)) {
@@ -125,14 +189,14 @@ for (const archive of archives) {
     } else if (f.kind === "CommBdry" && f.type === TOWN_BOUNDARY_TYPE && f.geometry.type === "LineString") {
       townLines.push({
         type: "Feature",
-        properties: { kind: "boundary", type: f.type },
+        properties: { type: f.type },
         geometry: { type: "LineString", coordinates: f.geometry.coordinates.map(roundPosition) },
       });
     } else if (f.kind === "CommPt" && f.geometry.type === "Point") {
       townPoints.push({
         feature: {
           type: "Feature",
-          properties: { kind: "point", type: f.type, name: f.name ?? "" },
+          properties: { name: f.name ?? "" },
           geometry: { type: "Point", coordinates: roundPosition(f.geometry.coordinates) },
         },
         admCode: f.admCode,
@@ -182,12 +246,13 @@ function findMunicipality(pos: Position): string | undefined {
     .properties.code;
 }
 
-const townsByMuni = new Map<string, Feature[]>();
-const addTown = (code: string | undefined, f: Feature) => {
+const townsByMuni = new Map<string, { lines: TownLine[]; points: TownPoint[] }>();
+const addTown = (code: string | undefined, f: TownLine | TownPoint) => {
   if (!code) return false;
-  const list = townsByMuni.get(code) ?? [];
-  list.push(f);
-  townsByMuni.set(code, list);
+  const towns = townsByMuni.get(code) ?? { lines: [], points: [] };
+  if (f.geometry.type === "Point") towns.points.push(f as TownPoint);
+  else towns.lines.push(f as TownLine);
+  townsByMuni.set(code, towns);
   return true;
 };
 
@@ -195,7 +260,7 @@ const knownCodes = new Set(munis.map((m) => m.feature.properties.code));
 let unassigned = 0;
 const endpointKey = (p: Position) => `${p[0]},${p[1]}`;
 const codeByEndpoint = new Map<string, string>();
-let pendingLines: Feature<LineString, TownProps>[] = [];
+let pendingLines: TownLine[] = [];
 for (const line of townLines) {
   // 中央の頂点から順に、市区町村ポリゴン内にある頂点で判定する（海岸沿いの線への対策）
   const coords = line.geometry.coordinates;
@@ -234,18 +299,19 @@ if (unassigned > 0) console.warn(`市区町村に振り分けられなかった�
 await rm(path.join(outDir, "prefectures"), { recursive: true, force: true });
 
 const prefectures = new Map<string, PrefectureEntry>();
+let townGroupTotal = 0;
 for (const { feature, bbox } of munis) {
   const { areaKm2, ...props } = feature.properties;
+  const muni: MuniFeature = { ...feature, properties: props };
   const dir = `prefectures/${props.prefCode}/${props.code}`;
-  const towns = townsByMuni.get(props.code) ?? [];
+  const source = townsByMuni.get(props.code);
+  const towns = source ? await buildTownAreas(muni, source.lines, source.points) : [];
+  const townCount = towns.filter((t) => t.properties.kind === "area").length;
+  townGroupTotal += townCount;
   const center = centers.get(props.code) ?? [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2];
 
-  await writeJson(path.join(outDir, dir, "boundary.geojson"), featureCollection([{ ...feature, properties: props }]));
-  if (towns.length > 0) {
-    // 線を先、点を後にして描画順を安定させる
-    towns.sort((a, b) => (a.geometry.type === "Point" ? 1 : 0) - (b.geometry.type === "Point" ? 1 : 0));
-    await writeJson(path.join(outDir, dir, "towns.geojson"), featureCollection(towns));
-  }
+  await writeJson(path.join(outDir, dir, "boundary.geojson"), featureCollection([muni]));
+  if (towns.length > 0) await writeJson(path.join(outDir, dir, "towns.geojson"), featureCollection(towns));
 
   const entry: MunicipalityEntry = {
     code: props.code,
@@ -254,8 +320,8 @@ for (const { feature, bbox } of munis) {
     areaKm2,
     bbox: bbox.map(round6) as BBox,
     center: [round6(center[0]!), round6(center[1]!)],
-    hasTowns: towns.length > 0,
-    townCount: towns.filter((t) => t.geometry.type === "Point").length,
+    hasTowns: townCount > 0,
+    townCount,
     dir,
   };
   const pref = prefectures.get(props.prefCode) ?? {
@@ -293,5 +359,5 @@ await writeFile(path.join(outDir, "municipalities.geojson"), String(shp["municip
 await writeFile(path.join(outDir, "prefectures.geojson"), String(shp["prefectures.json"]));
 
 console.log(
-  `wrote ${outDir}: 都道府県 ${prefList.length}, 市区町村 ${munis.length}, 町字データあり ${townsByMuni.size}`,
+  `wrote ${outDir}: 都道府県 ${prefList.length}, 市区町村 ${munis.length}, 町・大字 ${townGroupTotal}（町字データあり ${townsByMuni.size} 市区町村）`,
 );
