@@ -14,9 +14,9 @@ export interface MunicipalityEntry {
   bbox: BBox;
   /** ラベル表示用の代表点 [経度, 緯度] */
   center: [number, number];
-  /** 町字界データ（towns.geojson）があるか */
+  /** 町・大字の区域データ（towns.geojson）があるか */
   hasTowns: boolean;
-  /** 大字・町・丁目の代表点の数 */
+  /** 町・大字（丁目をまとめた単位）の数 */
   townCount: number;
   /** data/edited からの相対パス */
   dir: string;
@@ -57,7 +57,9 @@ export interface PrefectureProps {
   prefName: string;
 }
 
-/** towns.geojson の地物属性 */
-export type TownProps =
-  | { kind: "boundary"; type: string }
-  | { kind: "point"; type: string; name: string };
+/**
+ * towns.geojson の地物属性
+ * - area : 町・大字の区域（丁目は統合済み）。count は元の大字・町・丁目の数
+ * - label: 区域内の名称表示位置
+ */
+export type TownProps = { kind: "area"; name: string; count: number } | { kind: "label"; name: string };
