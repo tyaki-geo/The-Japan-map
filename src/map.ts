@@ -3,7 +3,7 @@ import type { GeoJSONSource, MapLayerMouseEvent, MapMouseEvent } from "maplibre-
 import "maplibre-gl/dist/maplibre-gl.css";
 // バンドル後は maplibre-gl.mjs の隣に worker が置かれないため、Vite で配信した URL を明示する
 import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?url";
-import type { FeatureCollection } from "geojson";
+import type { Feature, FeatureCollection } from "geojson";
 import { dataUrl } from "./lib/data";
 import type { BBox, DatasetIndex, MunicipalityEntry } from "./types";
 
@@ -15,18 +15,44 @@ const EMPTY: FeatureCollection = { type: "FeatureCollection", features: [] };
 const PREF_COLORS = ["#4e79a7", "#f28e2b", "#59a14f", "#b07aa1", "#e15759", "#76b7b2", "#edc948", "#9c755f"];
 
 export const LAYER_GROUPS = {
-  basemap: ["gsi-blank"],
-  municipalities: ["muni-fill", "muni-line", "pref-line"],
+  municipalities: ["muni-fill", "muni-line", "pref-line", "selected-line"],
   towns: ["towns-fill", "towns-line"],
   labels: ["muni-label", "towns-label"],
 } as const;
 export type LayerGroup = keyof typeof LAYER_GROUPS;
+
+/** クイズで地図に示す対象 */
+export interface QuizTarget {
+  /** 強調する区域（市区町村または町・大字） */
+  feature: Feature;
+  bbox: BBox;
+  /** 町・大字の問題で、その市区町村の町・大字を線で示す */
+  towns?: FeatureCollection;
+  /** 町・大字の問題で、その市区町村の境界 */
+  municipality?: MunicipalityEntry;
+}
 
 export interface JapanMap {
   map: maplibregl.Map;
   select(m: MunicipalityEntry | null, opts?: { fit?: boolean }): void;
   setGroupVisible(group: LayerGroup, visible: boolean): void;
   fitBBox(bbox: BBox): void;
+  /** クイズ中はラベル・名前のホバー表示・クリック選択を止め、クリックを回答として渡す */
+  setQuizMode(on: boolean, onAnswer?: (answer: QuizAnswer) => void): void;
+  /** 答え合わせで正解の区域を強調して映す（null で消す） */
+  showQuizTarget(target: QuizTarget | null): void;
+  /** クリックした位置に印を付ける（null で消す） */
+  markAnswer(lngLat: [number, number] | null): void;
+  /** 答え合わせの後に名前のラベルを出す */
+  revealLabels(on: boolean): void;
+}
+
+/** クイズでクリックされた市区町村と位置 */
+export interface QuizAnswer {
+  code: string;
+  name: string;
+  prefName: string;
+  lngLat: [number, number];
 }
 
 export function createMap(
@@ -70,24 +96,20 @@ export function createMap(
     style: {
       version: 8,
       sources: {
-        // 地理院タイル「白地図」（ズーム14まで。以降は拡大表示）
-        "gsi-blank": {
-          type: "raster",
-          tiles: ["https://cyberjapandata.gsi.go.jp/xyz/blank/{z}/{x}/{y}.png"],
-          tileSize: 256,
-          minzoom: 5,
-          maxzoom: 14,
-          attribution:
-            '<a href="https://maps.gsi.go.jp/development/ichiran.html" target="_blank" rel="noopener">地理院タイル</a> / 基盤地図情報（国土地理院）を加工して作成',
+        prefectures: {
+          type: "geojson",
+          data: dataUrl("prefectures.geojson"),
+          attribution: "基盤地図情報（国土地理院）を加工して作成",
         },
-        prefectures: { type: "geojson", data: dataUrl("prefectures.geojson") },
         municipalities: { type: "geojson", data: dataUrl("municipalities.geojson"), promoteId: "code" },
         "muni-labels": { type: "geojson", data: labelPoints },
         selected: { type: "geojson", data: EMPTY },
         towns: { type: "geojson", data: EMPTY, generateId: true },
+        "quiz-target": { type: "geojson", data: EMPTY },
       },
       layers: [
-        { id: "gsi-blank", type: "raster", source: "gsi-blank" },
+        // 背景地図は使わず、陸地（市区町村の塗り）以外を海の色にする
+        { id: "background", type: "background", paint: { "background-color": "#eef3f8" } },
         {
           id: "muni-fill",
           type: "fill",
@@ -135,10 +157,22 @@ export function createMap(
           paint: { "line-color": "#c0392b", "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.6, 14, 1.5] },
         },
         {
+          id: "quiz-target-fill",
+          type: "fill",
+          source: "quiz-target",
+          paint: { "fill-color": "#d35400", "fill-opacity": 0.45 },
+        },
+        {
           id: "selected-line",
           type: "line",
           source: "selected",
           paint: { "line-color": "#d35400", "line-width": 3 },
+        },
+        {
+          id: "quiz-target-line",
+          type: "line",
+          source: "quiz-target",
+          paint: { "line-color": "#a04000", "line-width": 3 },
         },
         {
           id: "towns-label",
@@ -174,6 +208,19 @@ export function createMap(
   let hovered: string | null = null;
   let hoveredTown: string | number | null = null;
   let selected: string | null = null;
+  let quiz = false;
+  let onQuizAnswer: ((answer: QuizAnswer) => void) | undefined;
+  let answerMarker: maplibregl.Marker | null = null;
+  let labelsRevealed = false;
+  const groupVisible: Record<LayerGroup, boolean> = { municipalities: true, towns: true, labels: true };
+
+  const applyVisibility = () => {
+    for (const [group, ids] of Object.entries(LAYER_GROUPS) as [LayerGroup, readonly string[]][]) {
+      // クイズ中は答えが分かってしまうラベルを、答え合わせまで隠す
+      const visible = quiz ? group !== "labels" || labelsRevealed : groupVisible[group];
+      for (const id of ids) map.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
+    }
+  };
 
   const setState = (code: string | null, state: Record<string, boolean>) => {
     if (code) map.setFeatureState({ source: "municipalities", id: code }, state);
@@ -194,28 +241,46 @@ export function createMap(
       hovered = code;
       setState(hovered, { hover: true });
     }
+    map.getCanvas().style.cursor = "pointer";
+    // クイズ中は名前が出ると答えが分かるので、区域の強調だけにする
+    if (quiz && !labelsRevealed) {
+      popup.remove();
+      return;
+    }
     // 選択中の市区町村では町・大字名も表示する
     const town = map.getLayoutProperty("towns-fill", "visibility") === "none"
       ? undefined
       : map.queryRenderedFeatures(e.point, { layers: ["towns-fill"] })[0];
     setHoveredTown(town?.id ?? null);
-    map.getCanvas().style.cursor = "pointer";
     const label = [f.properties.prefName, f.properties.name, town?.properties.name].filter(Boolean).join(" ");
     popup.setLngLat(e.lngLat).setText(label).addTo(map);
   });
-  map.on("mouseleave", "muni-fill", () => {
+  const clearHover = () => {
     setState(hovered, { hover: false });
     setHoveredTown(null);
     hovered = null;
     map.getCanvas().style.cursor = "";
     popup.remove();
-  });
+  };
+  map.on("mouseleave", "muni-fill", clearHover);
   map.on("click", (e: MapMouseEvent) => {
     const f = map.queryRenderedFeatures(e.point, { layers: ["muni-fill"] })[0];
-    onSelect(f ? String(f.properties.code) : null);
+    if (!quiz) {
+      onSelect(f ? String(f.properties.code) : null);
+      return;
+    }
+    if (f && onQuizAnswer) {
+      onQuizAnswer({
+        code: String(f.properties.code),
+        name: String(f.properties.name),
+        prefName: String(f.properties.prefName),
+        lngLat: [e.lngLat.lng, e.lngLat.lat],
+      });
+    }
   });
 
   const fitBBox = (b: BBox) => map.fitBounds(b, { padding: 40, maxZoom: 14 });
+  const source = (id: string) => map.getSource<GeoJSONSource>(id)!;
 
   const api: JapanMap = {
     map,
@@ -225,21 +290,40 @@ export function createMap(
       selected = m?.code ?? null;
       setState(selected, { selected: true });
 
-      const selectedSrc = map.getSource<GeoJSONSource>("selected")!;
-      const townsSrc = map.getSource<GeoJSONSource>("towns")!;
       hoveredTown = null; // setData で地物 ID が振り直されるため
-      selectedSrc.setData(m ? dataUrl(`${m.dir}/boundary.geojson`) : EMPTY);
-      townsSrc.setData(m?.hasTowns ? dataUrl(`${m.dir}/towns.geojson`) : EMPTY);
+      source("selected").setData(m ? dataUrl(`${m.dir}/boundary.geojson`) : EMPTY);
+      source("towns").setData(m?.hasTowns ? dataUrl(`${m.dir}/towns.geojson`) : EMPTY);
       if (m && opts.fit !== false) fitBBox(m.bbox);
     },
     setGroupVisible(group, visible) {
-      for (const id of LAYER_GROUPS[group]) {
-        map.setLayoutProperty(id, "visibility", visible ? "visible" : "none");
-      }
-      // 選択中の詳細境界は市区町村レイヤに連動させる
-      if (group === "municipalities") {
-        map.setLayoutProperty("selected-line", "visibility", visible ? "visible" : "none");
-      }
+      groupVisible[group] = visible;
+      applyVisibility();
+    },
+    setQuizMode(on, onAnswer) {
+      quiz = on;
+      onQuizAnswer = on ? onAnswer : undefined;
+      labelsRevealed = false;
+      clearHover();
+      api.select(null);
+      api.showQuizTarget(null);
+      api.markAnswer(null);
+      applyVisibility();
+    },
+    showQuizTarget(target) {
+      hoveredTown = null;
+      source("quiz-target").setData(target ? { type: "FeatureCollection", features: [target.feature] } : EMPTY);
+      source("towns").setData(target?.towns ?? EMPTY);
+      source("selected").setData(
+        target?.municipality ? dataUrl(`${target.municipality.dir}/boundary.geojson`) : EMPTY,
+      );
+    },
+    markAnswer(lngLat) {
+      answerMarker?.remove();
+      answerMarker = lngLat ? new maplibregl.Marker({ color: "#1f5f9e" }).setLngLat(lngLat).addTo(map) : null;
+    },
+    revealLabels(on) {
+      labelsRevealed = on;
+      applyVisibility();
     },
   };
 
