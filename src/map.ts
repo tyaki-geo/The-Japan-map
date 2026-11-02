@@ -45,6 +45,10 @@ export interface JapanMap {
   addMarker(lngLat: [number, number], color: string): void;
   /** 色・印・強調をすべて消す */
   clearQuizMarks(): void;
+  /** 範囲へ動き、着いたら解決する（答え合わせで正解地点を巡る） */
+  flyToBBox(bbox: BBox, maxZoom: number): Promise<void>;
+  /** 利用者が地図を手で動かしたら呼ぶ。解除する関数を返す */
+  onUserMove(callback: () => void): () => void;
   /** 答え合わせの後に名前のラベルを出す */
   revealLabels(on: boolean): void;
 }
@@ -334,6 +338,25 @@ export function createMap(
     },
     addMarker(lngLat, color) {
       markers.push(new maplibregl.Marker({ color, scale: 0.8 }).setLngLat(lngLat).addTo(map));
+    },
+    flyToBBox(bbox, maxZoom) {
+      const duration = 1200;
+      return new Promise((resolve) => {
+        // 動かなくても止まらないよう、時間でも抜ける
+        const timer = setTimeout(resolve, duration + 800);
+        map.once("moveend", () => {
+          clearTimeout(timer);
+          resolve();
+        });
+        map.fitBounds(bbox, { padding: 60, maxZoom, duration });
+      });
+    },
+    onUserMove(callback) {
+      const events = ["dragstart", "wheel", "touchstart", "dblclick"] as const;
+      for (const e of events) map.on(e, callback);
+      return () => {
+        for (const e of events) map.off(e, callback);
+      };
     },
     clearQuizMarks() {
       for (const code of markedCodes) map.setFeatureState({ source: "municipalities", id: code }, { quiz: null });

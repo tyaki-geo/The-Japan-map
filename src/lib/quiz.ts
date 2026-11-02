@@ -26,7 +26,50 @@ export interface QuizConfig {
   mosaicLevel: number;
 }
 
-export const QUESTION_COUNTS: readonly QuestionCount[] = [5, 10, 20, "all"];
+/** 出題範囲をまとめて選ぶ地方（都道府県コード） */
+export const REGIONS: readonly { name: string; prefCodes: readonly string[] }[] = [
+  { name: "北海道", prefCodes: ["01"] },
+  { name: "東北", prefCodes: ["02", "03", "04", "05", "06", "07"] },
+  { name: "関東", prefCodes: ["08", "09", "10", "11", "12", "13", "14"] },
+  { name: "中部", prefCodes: ["15", "16", "17", "18", "19", "20", "21", "22", "23"] },
+  { name: "近畿", prefCodes: ["24", "25", "26", "27", "28", "29", "30"] },
+  { name: "中国", prefCodes: ["31", "32", "33", "34", "35"] },
+  { name: "四国", prefCodes: ["36", "37", "38", "39"] },
+  { name: "九州・沖縄", prefCodes: ["40", "41", "42", "43", "44", "45", "46", "47"] },
+];
+
+/** 地方のボタンを押したときの選択: その地方がすべて選ばれていれば外し、そうでなければすべて選ぶ */
+export function toggleRegion(selected: ReadonlySet<string>, region: readonly string[]): Set<string> {
+  const next = new Set(selected);
+  const all = region.every((c) => next.has(c));
+  for (const c of region) {
+    if (all) next.delete(c);
+    else next.add(c);
+  }
+  return next;
+}
+
+// ---- 問題数（出題できる地名の数に対する割合で決める） ----
+
+export const DEFAULT_QUESTION_PERCENT = 100;
+
+/** 問題数を 1〜出題できる数 に丸める。数でない入力は null */
+export function clampQuestionCount(n: number, total: number): number | null {
+  if (!Number.isFinite(n) || total <= 0) return null;
+  return Math.min(total, Math.max(1, Math.round(n)));
+}
+
+/** 割合 [%] から問題数（最低1問） */
+export function questionCountFromPercent(percent: number, total: number): number {
+  if (total <= 0) return 0;
+  return clampQuestionCount((total * percent) / 100, total)!;
+}
+
+/** 問題数から割合 [%]（スライダーの位置） */
+export function percentFromQuestionCount(count: number, total: number): number {
+  if (total <= 0) return DEFAULT_QUESTION_PERCENT;
+  return Math.min(100, Math.max(1, Math.round((count / total) * 100)));
+}
 export const MASK_SYMBOLS = ["○", "×", "△", "□", "◇", "☆"] as const;
 export const MOSAIC_LEVEL_MIN = 1;
 export const MOSAIC_LEVEL_MAX = 10;
