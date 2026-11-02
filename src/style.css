@@ -198,6 +198,219 @@ body {
   padding: 2px 0;
 }
 
+/* ---- モード切り替え ---- */
+.modes {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 4px;
+}
+
+.modes button {
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+}
+
+.modes button.active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.panel[hidden] {
+  display: none;
+}
+
+/* ---- クイズ ---- */
+.quiz {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.quiz h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.quiz .field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.quiz select {
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 14px;
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.quiz .options {
+  margin: 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.quiz .options label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 2px 0;
+}
+
+.quiz .range {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.quiz .range input {
+  flex: 1;
+}
+
+.quiz .range output {
+  min-width: 2ch;
+  text-align: right;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+.sign-box,
+.sign-preview {
+  display: flex;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.sign {
+  max-width: 100%;
+  border-radius: 6px;
+}
+
+.quiz .prompt {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.quiz .progress {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.quiz .actions {
+  display: flex;
+  gap: 8px;
+}
+
+.quiz button {
+  padding: 8px 12px;
+  font: inherit;
+  font-size: 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  color: inherit;
+  cursor: pointer;
+}
+
+.quiz button.primary {
+  flex: 1;
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.quiz button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.quiz .verdict {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.quiz .verdict.ok,
+.quiz .results .ok .mark {
+  color: #1a7f37;
+}
+
+.quiz .verdict.ng,
+.quiz .results .ng .mark {
+  color: #cf222e;
+}
+
+.quiz dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  margin: 0;
+  font-size: 13px;
+}
+
+.quiz dt {
+  color: var(--muted);
+}
+
+.quiz dd {
+  margin: 0;
+}
+
+.quiz .score {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+}
+
+.quiz .results {
+  margin: 0;
+  padding-left: 1.6em;
+  font-size: 14px;
+}
+
+.quiz .results li {
+  padding: 2px 0;
+}
+
+.quiz .results .mark {
+  display: inline-block;
+  width: 1.4em;
+  font-weight: 700;
+}
+
+.quiz .results small {
+  margin-left: 6px;
+  color: var(--muted);
+}
+
 @media (max-width: 720px) {
   #app {
     grid-template-columns: 1fr;

@@ -1,23 +1,11 @@
+// 勉強モードのサイドバー（一覧・検索・情報パネル・レイヤ）
 import { filterPrefectures } from "./lib/search";
 import { dataUrl } from "./lib/data";
+import { h, type Child } from "./lib/dom";
 import type { LayerGroup } from "./map";
 import type { BBox, DatasetIndex, MunicipalityEntry, PrefectureEntry } from "./types";
 
-type Child = Node | string | null | undefined | false;
-
-function h<K extends keyof HTMLElementTagNameMap>(
-  tag: K,
-  attrs: Record<string, string> = {},
-  ...children: Child[]
-): HTMLElementTagNameMap[K] {
-  const el = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
-  for (const c of children) if (c) el.append(c);
-  return el;
-}
-
 const LAYER_LABELS: Record<LayerGroup, string> = {
-  basemap: "背景地図（地理院 白地図）",
   municipalities: "都道府県・市区町村界",
   towns: "町・大字の区域（選択時）",
   labels: "名称ラベル",
@@ -34,7 +22,6 @@ export interface Sidebar {
 }
 
 export function createSidebar(root: HTMLElement, index: DatasetIndex, handlers: SidebarHandlers): Sidebar {
-  const muniCount = index.prefectures.reduce((n, p) => n + p.municipalities.length, 0);
   const prefByCode = new Map(index.prefectures.map((p) => [p.code, p]));
   let selectedCode: string | null = null;
 
@@ -50,22 +37,7 @@ export function createSidebar(root: HTMLElement, index: DatasetIndex, handlers: 
     layers.append(h("label", {}, cb, LAYER_LABELS[group]));
   }
 
-  root.append(
-    h(
-      "header",
-      {},
-      h("h1", {}, "The Japan Map"),
-      h(
-        "p",
-        { class: "summary" },
-        `${index.prefectures.length} 都道府県 / ${muniCount} 市区町村 / 2次メッシュ ${index.source.meshes.length} 区画`,
-      ),
-    ),
-    search,
-    info,
-    list,
-    layers,
-  );
+  root.append(search, info, list, layers);
 
   function renderList() {
     const prefs = filterPrefectures(index, search.value);
