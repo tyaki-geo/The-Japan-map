@@ -29,6 +29,7 @@
 ```
 edited/
 ├── index.json                 都道府県 → 市区町村の一覧（名称・コード・範囲・面積など）
+├── towns-index.json           市区町村コード → 町・大字名の一覧（クイズで同じ名前の地名を探すのに使う）
 ├── prefectures.geojson        都道府県（全体表示用に簡略化）
 ├── municipalities.geojson     市区町村（全体表示用に簡略化）
 └── prefectures/

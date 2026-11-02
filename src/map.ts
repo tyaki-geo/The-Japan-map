@@ -21,16 +21,14 @@ export const LAYER_GROUPS = {
 } as const;
 export type LayerGroup = keyof typeof LAYER_GROUPS;
 
-/** クイズで地図に示す対象 */
-export interface QuizTarget {
-  /** 強調する区域（市区町村または町・大字） */
-  feature: Feature;
-  bbox: BBox;
-  /** 町・大字の問題で、その市区町村の町・大字を線で示す */
-  towns?: FeatureCollection;
-  /** 町・大字の問題で、その市区町村の境界 */
-  municipality?: MunicipalityEntry;
-}
+/** クイズで市区町村に付ける色: 当たり / はずれ / 答え合わせで示す取り逃した正解 */
+export type QuizMark = "found" | "wrong" | "missed";
+
+export const QUIZ_MARK_COLORS: Record<QuizMark, string> = {
+  found: "#2da44e",
+  wrong: "#cf222e",
+  missed: "#d35400",
+};
 
 export interface JapanMap {
   map: maplibregl.Map;
@@ -39,10 +37,14 @@ export interface JapanMap {
   fitBBox(bbox: BBox): void;
   /** クイズ中はラベル・名前のホバー表示・クリック選択を止め、クリックを回答として渡す */
   setQuizMode(on: boolean, onAnswer?: (answer: QuizAnswer) => void): void;
-  /** 答え合わせで正解の区域を強調して映す（null で消す） */
-  showQuizTarget(target: QuizTarget | null): void;
-  /** クリックした位置に印を付ける（null で消す） */
-  markAnswer(lngLat: [number, number] | null): void;
+  /** 市区町村に当たり・はずれなどの色を付ける（null で消す） */
+  setQuizMark(code: string, mark: QuizMark | null): void;
+  /** 答え合わせで町・大字の区域を強調する（空配列で消す） */
+  showQuizAreas(features: Feature[]): void;
+  /** クリックした位置に印を付ける */
+  addMarker(lngLat: [number, number], color: string): void;
+  /** 色・印・強調をすべて消す */
+  clearQuizMarks(): void;
   /** 答え合わせの後に名前のラベルを出す */
   revealLabels(on: boolean): void;
 }
@@ -115,9 +117,22 @@ export function createMap(
           type: "fill",
           source: "municipalities",
           paint: {
-            "fill-color": prefColor,
+            // クイズの当たり・はずれは feature-state "quiz" で色を変える
+            "fill-color": [
+              "match",
+              ["coalesce", ["feature-state", "quiz"], ""],
+              "found",
+              QUIZ_MARK_COLORS.found,
+              "wrong",
+              QUIZ_MARK_COLORS.wrong,
+              "missed",
+              QUIZ_MARK_COLORS.missed,
+              prefColor,
+            ],
             "fill-opacity": [
               "case",
+              ["!=", ["coalesce", ["feature-state", "quiz"], ""], ""],
+              0.6,
               ["boolean", ["feature-state", "selected"], false],
               0.35,
               ["boolean", ["feature-state", "hover"], false],
@@ -210,7 +225,8 @@ export function createMap(
   let selected: string | null = null;
   let quiz = false;
   let onQuizAnswer: ((answer: QuizAnswer) => void) | undefined;
-  let answerMarker: maplibregl.Marker | null = null;
+  let markers: maplibregl.Marker[] = [];
+  const markedCodes = new Set<string>();
   let labelsRevealed = false;
   const groupVisible: Record<LayerGroup, boolean> = { municipalities: true, towns: true, labels: true };
 
@@ -305,21 +321,26 @@ export function createMap(
       labelsRevealed = false;
       clearHover();
       api.select(null);
-      api.showQuizTarget(null);
-      api.markAnswer(null);
+      api.clearQuizMarks();
       applyVisibility();
     },
-    showQuizTarget(target) {
-      hoveredTown = null;
-      source("quiz-target").setData(target ? { type: "FeatureCollection", features: [target.feature] } : EMPTY);
-      source("towns").setData(target?.towns ?? EMPTY);
-      source("selected").setData(
-        target?.municipality ? dataUrl(`${target.municipality.dir}/boundary.geojson`) : EMPTY,
-      );
+    setQuizMark(code, mark) {
+      map.setFeatureState({ source: "municipalities", id: code }, { quiz: mark });
+      if (mark) markedCodes.add(code);
+      else markedCodes.delete(code);
     },
-    markAnswer(lngLat) {
-      answerMarker?.remove();
-      answerMarker = lngLat ? new maplibregl.Marker({ color: "#1f5f9e" }).setLngLat(lngLat).addTo(map) : null;
+    showQuizAreas(features) {
+      source("quiz-target").setData({ type: "FeatureCollection", features });
+    },
+    addMarker(lngLat, color) {
+      markers.push(new maplibregl.Marker({ color, scale: 0.8 }).setLngLat(lngLat).addTo(map));
+    },
+    clearQuizMarks() {
+      for (const code of markedCodes) map.setFeatureState({ source: "municipalities", id: code }, { quiz: null });
+      markedCodes.clear();
+      for (const m of markers) m.remove();
+      markers = [];
+      source("quiz-target").setData(EMPTY);
     },
     revealLabels(on) {
       labelsRevealed = on;

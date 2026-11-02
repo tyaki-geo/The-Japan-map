@@ -411,6 +411,115 @@ body {
   color: var(--muted);
 }
 
+/* 正解の数だけ並べる □: 白抜き = 未回答、緑 = 当たり、赤 = はずれ */
+.quiz .boxes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.quiz .box {
+  width: 18px;
+  height: 18px;
+  border: 2px solid var(--muted);
+  border-radius: 3px;
+  background: var(--bg);
+}
+
+.quiz .box.found {
+  border-color: #2da44e;
+  background: #2da44e;
+}
+
+.quiz .box.wrong {
+  border-color: #cf222e;
+  background: #cf222e;
+}
+
+.quiz .count {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.quiz .notice {
+  margin: 0;
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.quiz .verdict.partial {
+  color: var(--accent);
+}
+
+.quiz .clicks,
+.quiz .answers {
+  margin: 0;
+  padding-left: 1.6em;
+  font-size: 13px;
+}
+
+.quiz .clicks li,
+.quiz .answers li {
+  padding: 1px 0;
+}
+
+.quiz .clicks .mark,
+.quiz .answers .mark {
+  display: inline-block;
+  width: 1.4em;
+  font-weight: 700;
+}
+
+.quiz .clicks .ok .mark,
+.quiz .answers .ok .mark {
+  color: #1a7f37;
+}
+
+.quiz .clicks .ng .mark {
+  color: #cf222e;
+}
+
+.quiz .answers .missed .mark {
+  color: #d35400;
+}
+
+.quiz .clicks small,
+.quiz .answers small {
+  margin-left: 6px;
+  color: var(--muted);
+}
+
+/* 出題範囲（都道府県の複数選択） */
+.quiz .scope-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.quiz .scope-actions .hint {
+  margin: 0 0 0 auto;
+}
+
+.quiz button.small {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+
+.quiz .pref-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0 4px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.quiz .pref-grid label {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
 @media (max-width: 720px) {
   #app {
     grid-template-columns: 1fr;
