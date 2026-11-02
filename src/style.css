@@ -520,6 +520,98 @@ body {
   white-space: nowrap;
 }
 
+/* 地方ごとにまとめて選ぶボタン */
+.quiz .regions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.quiz button.region.active {
+  border-color: var(--accent);
+  background: var(--accent-bg);
+  color: var(--accent);
+}
+
+/* 問題数（割合のスライダーと、クリックで手入力できる数） */
+.quiz .count-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.quiz button.count-value {
+  padding: 2px 8px;
+  font-size: 16px;
+  font-weight: 700;
+  border-style: dashed;
+}
+
+.quiz .count-input {
+  width: 8em;
+  padding: 4px 6px;
+  font: inherit;
+  font-size: 15px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+}
+
+.quiz .count-row .hint {
+  margin: 0;
+}
+
+/* 答え合わせの看板一覧（正解の数だけ） */
+.quiz .sign-cards {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.quiz button.sign-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  font-size: 11px;
+  border: 2px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+}
+
+.quiz button.sign-card .sign {
+  border-radius: 4px;
+}
+
+.quiz button.sign-card.found {
+  border-color: #2da44e;
+}
+
+.quiz button.sign-card.missed {
+  border-color: #d35400;
+}
+
+.quiz button.sign-card.active {
+  box-shadow: 0 0 0 3px #1f5f9e;
+}
+
+.quiz button.sign-card .mark {
+  margin-right: 4px;
+  font-weight: 700;
+}
+
+.quiz button.sign-card.found .mark {
+  color: #1a7f37;
+}
+
+.quiz button.sign-card.missed .mark {
+  color: #d35400;
+}
+
 @media (max-width: 720px) {
   #app {
     grid-template-columns: 1fr;

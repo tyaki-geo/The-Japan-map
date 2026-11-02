@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   Attempt,
+  REGIONS,
+  clampQuestionCount,
+  percentFromQuestionCount,
+  questionCountFromPercent,
+  toggleRegion,
   MASK_SYMBOLS,
   answerCodes,
   clueMatches,
@@ -195,5 +200,45 @@ describe("mosaicBlockRatio", () => {
     expect(mosaicBlockRatio(1)).toBeLessThan(mosaicBlockRatio(10));
     expect(mosaicBlockRatio(0)).toBe(mosaicBlockRatio(1));
     expect(mosaicBlockRatio(99)).toBe(mosaicBlockRatio(10));
+  });
+});
+
+describe("地方", () => {
+  it("47都道府県をちょうど1回ずつ含む", () => {
+    const codes = REGIONS.flatMap((r) => r.prefCodes);
+    expect(codes).toHaveLength(47);
+    expect(new Set(codes).size).toBe(47);
+    expect(codes.sort()).toEqual(Array.from({ length: 47 }, (_, i) => String(i + 1).padStart(2, "0")));
+  });
+
+  it("一部だけ選ばれていればすべて選び、すべて選ばれていれば外す", () => {
+    const shikoku = REGIONS.find((r) => r.name === "四国")!.prefCodes;
+    const once = toggleRegion(new Set(["38", "13"]), shikoku);
+    expect([...once].sort()).toEqual(["13", "36", "37", "38", "39"]);
+    expect([...toggleRegion(once, shikoku)]).toEqual(["13"]);
+  });
+});
+
+describe("問題数", () => {
+  it("範囲外の数は 1〜最大 に丸める", () => {
+    expect(clampQuestionCount(-3, 91)).toBe(1);
+    expect(clampQuestionCount(0, 91)).toBe(1);
+    expect(clampQuestionCount(50000000, 91)).toBe(91);
+    expect(clampQuestionCount(12.6, 91)).toBe(13);
+    expect(clampQuestionCount(Number.NaN, 91)).toBeNull();
+    expect(clampQuestionCount(5, 0)).toBeNull();
+  });
+
+  it("割合から問題数（最低1問）", () => {
+    expect(questionCountFromPercent(100, 91)).toBe(91);
+    expect(questionCountFromPercent(50, 91)).toBe(46);
+    expect(questionCountFromPercent(1, 20)).toBe(1);
+    expect(questionCountFromPercent(100, 0)).toBe(0);
+  });
+
+  it("問題数から割合", () => {
+    expect(percentFromQuestionCount(91, 91)).toBe(100);
+    expect(percentFromQuestionCount(1, 1000)).toBe(1);
+    expect(percentFromQuestionCount(46, 91)).toBe(51);
   });
 });
