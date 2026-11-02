@@ -59,6 +59,8 @@ async function main(app: HTMLElement) {
     onToggleLayer: (group, visible) => map.setGroupVisible(group, visible),
   });
   const game = createGame(quizEl, index, map);
+  // 開発時だけ、ブラウザのコンソールや自動テストから地図を操作できるようにする
+  if (import.meta.env.DEV) Object.assign(window, { __japanMap: map.map });
 
   let current: string | null = null;
   function applyHash() {

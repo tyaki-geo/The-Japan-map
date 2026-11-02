@@ -2,23 +2,31 @@
 //
 // GeoGuessr の練習用。看板などで見かける地名の文字を手がかりに、その場所を地図で答える。
 // 画質や距離で看板が読みにくい状況を、文字の一部を伏せる・文字にモザイクをかけることで再現する。
-import type { DatasetIndex, MunicipalityEntry } from "../types";
+//
+// 1問は「1つの地名（看板の文字）」。その文字に当てはまる場所は、出題範囲内のすべてが正解になる
+// （同じ名前の市区町村・町・大字や、文字欠けで伏せた1文字に何が入っても成り立つ名前）。
+// 正解が N 個なら N 回クリックでき、すべて当てる（完全解答）のを目指す。
+import type { DatasetIndex, MunicipalityEntry, TownsIndex } from "../types";
 
 /** 何を当てるか: 市区町村 / 市区町村以下の地名（町・大字） / その両方 */
 export type QuizKind = "municipality" | "town" | "mixed";
+export type QuestionKind = "municipality" | "town";
 /** 手がかりの文字の見え方: そのまま / 1文字を記号に置き換える / 文字にモザイクをかける */
 export type QuizVariant = "normal" | "masked" | "mosaic";
+/** 問題数。"all" は出題範囲内のすべての地名 */
+export type QuestionCount = number | "all";
 
 export interface QuizConfig {
   kind: QuizKind;
   variant: QuizVariant;
-  /** 出題範囲の都道府県コード。null は全国 */
-  prefCode: string | null;
-  questionCount: number;
+  /** 出題範囲の都道府県コード（複数） */
+  prefCodes: string[];
+  questionCount: QuestionCount;
   /** モザイクの濃さ（1〜10） */
   mosaicLevel: number;
 }
 
+export const QUESTION_COUNTS: readonly QuestionCount[] = [5, 10, 20, "all"];
 export const MASK_SYMBOLS = ["○", "×", "△", "□", "◇", "☆"] as const;
 export const MOSAIC_LEVEL_MIN = 1;
 export const MOSAIC_LEVEL_MAX = 10;
@@ -44,21 +52,33 @@ export function randomInt(rng: Rng, n: number): number {
   return Math.floor(rng() * n);
 }
 
-export function pickRandom<T>(items: readonly T[], rng: Rng): T | undefined {
-  return items.length === 0 ? undefined : items[randomInt(rng, items.length)];
+export function shuffle<T>(items: readonly T[], rng: Rng): T[] {
+  const a = [...items];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = randomInt(rng, i + 1);
+    [a[i], a[j]] = [a[j]!, a[i]!];
+  }
+  return a;
 }
 
 /** 出題範囲の市区町村（クイズに向かないものを除く） */
-export function municipalityPool(index: DatasetIndex, prefCode: string | null): MunicipalityEntry[] {
+export function municipalityPool(index: DatasetIndex, prefCodes: readonly string[]): MunicipalityEntry[] {
+  const codes = new Set(prefCodes);
   return index.prefectures
-    .filter((p) => prefCode === null || p.code === prefCode)
+    .filter((p) => codes.has(p.code))
     .flatMap((p) => p.municipalities)
     .filter((m) => QUIZ_MUNI_TYPES.has(m.type) && !m.name.startsWith("（"));
 }
 
-/** 町・大字の問題を出せる市区町村 */
-export function townMunicipalityPool(index: DatasetIndex, prefCode: string | null): MunicipalityEntry[] {
-  return municipalityPool(index, prefCode).filter((m) => m.hasTowns && m.townCount > 0);
+// ---- 手がかりの文字 ----
+
+export interface Clue {
+  /** 出題した地名 */
+  name: string;
+  /** 看板に出す文字（文字欠けでは1文字が記号になる） */
+  text: string;
+  /** 伏せた文字の位置（文字単位）。伏せていなければ null */
+  wildcard: number | null;
 }
 
 const MUNI_SUFFIX = /[市区町村]$/;
@@ -67,35 +87,117 @@ const MUNI_SUFFIX = /[市区町村]$/;
  * 名前の1文字を記号に置き換える。
  * 市区町村の末尾（市・区・町・村）は伏せても簡単すぎるので、2文字以上ならそれ以外から選ぶ
  */
-export function maskName(name: string, rng: Rng): string {
+export function maskName(name: string, rng: Rng): { text: string; index: number } {
   const chars = Array.from(name);
-  if (chars.length === 0) return name;
+  if (chars.length === 0) return { text: name, index: -1 };
   let positions = chars.map((_, i) => i);
   if (chars.length > 1 && MUNI_SUFFIX.test(name)) positions = positions.slice(0, -1);
-  const pos = positions[randomInt(rng, positions.length)]!;
-  chars[pos] = MASK_SYMBOLS[randomInt(rng, MASK_SYMBOLS.length)]!;
-  return chars.join("");
+  const index = positions[randomInt(rng, positions.length)]!;
+  chars[index] = MASK_SYMBOLS[randomInt(rng, MASK_SYMBOLS.length)]!;
+  return { text: chars.join(""), index };
 }
 
-/** 手がかりとして見せる文字（モザイクは描画側でかけるので、文字はそのまま） */
-export function clueText(name: string, variant: QuizVariant, rng: Rng): string {
-  return variant === "masked" ? maskName(name, rng) : name;
+/** 看板に出す文字を作る（モザイクは描画側でかけるので、文字はそのまま） */
+export function makeClue(name: string, variant: QuizVariant, rng: Rng): Clue {
+  if (variant !== "masked") return { name, text: name, wildcard: null };
+  const { text, index } = maskName(name, rng);
+  return { name, text, wildcard: index };
 }
 
-/** 各問題で何を出すか（ミックスは市区町村と町・大字を半々）。町・大字を出せない範囲なら市区町村にする */
-export function planKinds(config: QuizConfig, canAskTown: boolean, rng: Rng): ("municipality" | "town")[] {
-  return Array.from({ length: config.questionCount }, () => {
-    if (!canAskTown || config.kind === "municipality") return "municipality";
-    if (config.kind === "town") return "town";
-    return rng() < 0.5 ? "municipality" : "town";
-  });
+/** その名前が看板の文字に当てはまるか（伏せた1文字は何でもよい） */
+export function clueMatches(clue: Clue, candidate: string): boolean {
+  if (clue.wildcard === null) return candidate === clue.name;
+  const a = Array.from(clue.name);
+  const b = Array.from(candidate);
+  return a.length === b.length && a.every((c, i) => i === clue.wildcard || c === b[i]);
+}
+
+// ---- 出題 ----
+
+export interface PlannedQuestion {
+  kind: QuestionKind;
+  name: string;
+}
+
+/** 出題できる地名（同じ名前は1つにまとめる） */
+export function questionNames(kind: QuestionKind, munis: readonly MunicipalityEntry[], towns: TownsIndex | null): string[] {
+  const names =
+    kind === "municipality" ? munis.map((m) => m.name) : munis.flatMap((m) => towns?.[m.code] ?? []);
+  return [...new Set(names)];
 }
 
 /**
- * 市区町村の問題の正誤。看板の文字だけでは同名の市区町村を区別できないので、名前が同じなら正解にする
+ * 出題する地名の並び。ミックスで問題数を決めた場合は、市区町村と町・大字を半々に出す。
+ * 「すべて」は出題範囲内のすべての地名を出す
  */
-export function isCorrectMunicipality(target: MunicipalityEntry, clicked: Pick<MunicipalityEntry, "code" | "name">) {
-  return clicked.code === target.code || clicked.name === target.name;
+export function planQuestions(
+  config: QuizConfig,
+  munis: readonly MunicipalityEntry[],
+  towns: TownsIndex | null,
+  rng: Rng,
+): PlannedQuestion[] {
+  const tagged = (kind: QuestionKind) => shuffle(questionNames(kind, munis, towns), rng).map((name) => ({ kind, name }));
+  const muniQs = config.kind === "town" ? [] : tagged("municipality");
+  const townQs = config.kind === "municipality" ? [] : tagged("town");
+  if (config.questionCount === "all") return shuffle([...muniQs, ...townQs], rng);
+
+  const out: PlannedQuestion[] = [];
+  while (out.length < config.questionCount && (muniQs.length > 0 || townQs.length > 0)) {
+    const fromTown = townQs.length > 0 && (muniQs.length === 0 || rng() < 0.5);
+    out.push((fromTown ? townQs : muniQs).shift()!);
+  }
+  return out;
+}
+
+/** 看板の文字に当てはまる場所（市区町村コード）。町・大字は、その名前がある市区町村 */
+export function answerCodes(
+  kind: QuestionKind,
+  clue: Clue,
+  munis: readonly MunicipalityEntry[],
+  towns: TownsIndex | null,
+): string[] {
+  return munis
+    .filter((m) =>
+      kind === "municipality" ? clueMatches(clue, m.name) : (towns?.[m.code] ?? []).some((n) => clueMatches(clue, n)),
+    )
+    .map((m) => m.code);
+}
+
+// ---- 回答 ----
+
+export type Mark = "found" | "wrong";
+
+/** 1問の回答状況。正解の数だけクリックでき、同じ場所を2回クリックしても回数は減らない */
+export class Attempt {
+  readonly answers: ReadonlySet<string>;
+  readonly found = new Set<string>();
+  readonly wrong = new Set<string>();
+  readonly marks: Mark[] = [];
+
+  constructor(answers: readonly string[]) {
+    this.answers = new Set(answers);
+  }
+
+  get total(): number {
+    return this.answers.size;
+  }
+
+  get done(): boolean {
+    return this.marks.length >= this.total;
+  }
+
+  get perfect(): boolean {
+    return this.found.size === this.total;
+  }
+
+  /** クリックした市区町村を判定する。終わった後や、すでにクリックした場所は "duplicate" */
+  click(code: string): Mark | "duplicate" {
+    if (this.done || this.found.has(code) || this.wrong.has(code)) return "duplicate";
+    const mark: Mark = this.answers.has(code) ? "found" : "wrong";
+    (mark === "found" ? this.found : this.wrong).add(code);
+    this.marks.push(mark);
+    return mark;
+  }
 }
 
 /** モザイクの濃さ（1〜10）から、文字の高さに対する1マスの大きさの割合 */
@@ -103,13 +205,4 @@ export function mosaicBlockRatio(level: number): number {
   const l = Math.min(MOSAIC_LEVEL_MAX, Math.max(MOSAIC_LEVEL_MIN, Math.round(level)));
   // 1: 文字の高さの 1/30（ほぼ読める）〜 10: 1/3（ほぼ読めない）
   return l / 30;
-}
-
-export interface Score {
-  correct: number;
-  answered: number;
-}
-
-export function scoreLabel(s: Score): string {
-  return `${s.correct} / ${s.answered} 問正解`;
 }

@@ -1,28 +1,34 @@
-// クイズモード: 看板風に出した地名を手がかりに、その場所を地図で答える
+// クイズモード: 看板風に出した地名を手がかりに、その場所を地図で答える。
+// 当てはまる場所が複数あるときは、その数だけクリックしてすべて当てる（完全解答）のを目指す
 import type { Feature, FeatureCollection } from "geojson";
 import { loadDataset, municipalityFile } from "./lib/data";
 import { h } from "./lib/dom";
-import { distanceKm, geometryBBox } from "./lib/geo";
+import { distanceKm } from "./lib/geo";
 import { drawSign } from "./lib/mosaic";
 import {
+  Attempt,
   MOSAIC_LEVEL_MAX,
   MOSAIC_LEVEL_MIN,
-  clueText,
-  isCorrectMunicipality,
+  QUESTION_COUNTS,
+  answerCodes,
+  clueMatches,
+  makeClue,
   mosaicBlockRatio,
   municipalityPool,
-  pickRandom,
-  planKinds,
-  scoreLabel,
-  townMunicipalityPool,
+  planQuestions,
+  questionNames,
+  type Clue,
+  type Mark,
+  type PlannedQuestion,
+  type QuestionKind,
   type QuizConfig,
   type QuizKind,
   type QuizVariant,
   type Rng,
 } from "./lib/quiz";
 import { findMunicipality } from "./lib/search";
-import type { JapanMap, QuizAnswer, QuizTarget } from "./map";
-import type { BBox, DatasetIndex, MunicipalityEntry, TownProps } from "./types";
+import { QUIZ_MARK_COLORS, type JapanMap, type QuizAnswer } from "./map";
+import type { BBox, DatasetIndex, MunicipalityEntry, TownProps, TownsIndex } from "./types";
 
 const KIND_INFO: Record<QuizKind, { title: string; description: string }> = {
   municipality: { title: "市区町村当て", description: "看板の市区町村名を見て、その場所を地図でクリックします。" },
@@ -43,28 +49,32 @@ const VARIANT_LABELS: Record<QuizVariant, string> = {
 const PREVIEW_CODE = "13104";
 const PREVIEW_FALLBACK_NAME = "新宿区";
 const SIGN_SIZE = { width: 288, height: 96 };
-const QUESTION_COUNTS = [5, 10, 20];
+/** 答え合わせで町・大字の区域まで読み込んで示す市区町村の数の上限 */
+const MAX_AREA_REVEAL = 20;
 
 type TownCollection = FeatureCollection<Feature["geometry"], TownProps>;
 
-interface Question {
-  kind: "municipality" | "town";
-  /** 市区町村の問題では答え、町・大字の問題ではその町・大字がある市区町村 */
-  muni: MunicipalityEntry;
-  /** 町・大字の問題の答え */
-  townName?: string;
-  /** 看板に出す文字 */
-  clue: string;
-  target: QuizTarget;
-  /** 距離を測る正解の位置 */
-  point: [number, number];
+interface Click {
+  answer: QuizAnswer;
+  mark: Mark;
+  /** はずれのとき、最も近い正解までの距離 */
+  nearestKm: number | null;
 }
 
-interface Result {
-  question: Question;
-  correct: boolean;
-  answer: QuizAnswer | null;
-  distanceKm: number | null;
+interface Question {
+  kind: QuestionKind;
+  clue: Clue;
+  /** 看板の文字に当てはまる場所 */
+  answers: MunicipalityEntry[];
+  attempt: Attempt;
+  clicks: Click[];
+}
+
+interface Session {
+  plan: PlannedQuestion[];
+  munis: MunicipalityEntry[];
+  towns: TownsIndex | null;
+  results: Question[];
 }
 
 export interface Game {
@@ -74,28 +84,39 @@ export interface Game {
 
 export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap): Game {
   const rng: Rng = Math.random;
-  const config: QuizConfig = { kind: "municipality", variant: "normal", prefCode: null, questionCount: 10, mosaicLevel: 4 };
+  const config: QuizConfig = {
+    kind: "municipality",
+    variant: "normal",
+    prefCodes: index.prefectures.map((p) => p.code),
+    questionCount: 10,
+    mosaicLevel: 4,
+  };
   const prefName = new Map(index.prefectures.map((p) => [p.code, p.name]));
-  const townsCache = new Map<string, Promise<TownCollection>>();
+  const townAreasCache = new Map<string, Promise<TownCollection>>();
   const previewName = findMunicipality(index, PREVIEW_CODE)?.name ?? PREVIEW_FALLBACK_NAME;
+  let townsIndex: Promise<TownsIndex> | null = null;
 
-  let session: { questions: ("municipality" | "town")[]; results: Result[]; used: Set<string> } | null = null;
+  let session: Session | null = null;
   let current: Question | null = null;
   let answering = false;
   /** 答え合わせで地図を動かす前の表示位置（次の問題で戻す） */
   let viewBeforeReveal: (() => void) | null = null;
 
-  const loadTowns = (m: MunicipalityEntry) => {
-    let p = townsCache.get(m.code);
+  const loadTownsIndex = () => (townsIndex ??= loadDataset<TownsIndex>("towns-index.json"));
+  const loadTownAreas = (m: MunicipalityEntry) => {
+    let p = townAreasCache.get(m.code);
     if (!p) {
       p = loadDataset<TownCollection>(municipalityFile(m, "towns.geojson"));
-      townsCache.set(m.code, p);
+      townAreasCache.set(m.code, p);
     }
     return p;
   };
 
-  const scopeBBox = (): BBox => {
-    const prefs = index.prefectures.filter((p) => config.prefCode === null || p.code === config.prefCode);
+  const placeName = (m: MunicipalityEntry) => `${prefName.get(m.code.slice(0, 2)) ?? ""} ${m.name}`;
+
+  const scopeBBox = (): BBox | null => {
+    const prefs = index.prefectures.filter((p) => config.prefCodes.includes(p.code));
+    if (prefs.length === 0) return null;
     return [
       Math.min(...prefs.map((p) => p.bbox[0])),
       Math.min(...prefs.map((p) => p.bbox[1])),
@@ -103,28 +124,75 @@ export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap
       Math.max(...prefs.map((p) => p.bbox[3])),
     ];
   };
+  const fitScope = () => {
+    const b = scopeBBox();
+    if (b) map.fitBBox(b);
+  };
 
   const signCanvas = (text: string, mosaic: boolean) => {
-    const canvas = h("canvas", { class: "sign", role: "img", "aria-label": "看板" });
+    // 読み上げ用の説明。モザイクのときは文字を出すと答えが分かるので伏せる
+    const label = mosaic ? "モザイクのかかった看板" : `看板: ${text}`;
+    const canvas = h("canvas", { class: "sign", role: "img", "aria-label": label });
     drawSign(canvas, text, { ...SIGN_SIZE, mosaicRatio: mosaic ? mosaicBlockRatio(config.mosaicLevel) : undefined });
     return canvas;
   };
+
+  /** 正解の数だけ並べる □（当たりは緑、はずれは赤、未回答は白抜き） */
+  const answerBoxes = (q: Question) =>
+    h(
+      "div",
+      { class: "boxes", "aria-label": `正解 ${q.attempt.total} か所のうち ${q.attempt.found.size} か所` },
+      ...Array.from({ length: q.attempt.total }, (_, i) => h("span", { class: `box ${q.attempt.marks[i] ?? ""}` })),
+    );
 
   // ---- 設定 ----
   function renderSetup() {
     session = null;
     current = null;
     answering = false;
+    viewBeforeReveal = null;
     map.setQuizMode(true, onAnswer);
     const info = KIND_INFO[config.kind];
 
-    const scope = h("select", { "aria-label": "出題範囲" }, h("option", { value: "" }, "全国"));
-    for (const p of index.prefectures) scope.append(h("option", { value: p.code }, p.name));
-    scope.value = config.prefCode ?? "";
+    // 出題範囲（都道府県を複数選べる）
+    const selected = new Set(config.prefCodes);
+    const scopeSummary = h("span", { class: "hint" });
+    const checkboxes = index.prefectures.map((p) => {
+      const cb = h("input", { type: "checkbox", value: p.code });
+      cb.checked = selected.has(p.code);
+      cb.addEventListener("change", () => {
+        if (cb.checked) selected.add(p.code);
+        else selected.delete(p.code);
+        applyScope();
+      });
+      return { cb, label: h("label", {}, cb, p.name) };
+    });
+    const setAll = (on: boolean) => {
+      for (const { cb } of checkboxes) cb.checked = on;
+      if (on) index.prefectures.forEach((p) => selected.add(p.code));
+      else selected.clear();
+      applyScope();
+    };
+    const allBtn = h("button", { type: "button", class: "small" }, "全国");
+    allBtn.addEventListener("click", () => setAll(true));
+    const noneBtn = h("button", { type: "button", class: "small" }, "すべて解除");
+    noneBtn.addEventListener("click", () => setAll(false));
+    const scope = h(
+      "fieldset",
+      { class: "options scope" },
+      h("legend", {}, "出題範囲"),
+      h("div", { class: "scope-actions" }, allBtn, noneBtn, scopeSummary),
+      h("div", { class: "pref-grid" }, ...checkboxes.map((c) => c.label)),
+    );
 
     const count = h("select", { "aria-label": "問題数" });
-    for (const n of QUESTION_COUNTS) count.append(h("option", { value: String(n) }, `${n} 問`));
+    for (const n of QUESTION_COUNTS) {
+      count.append(h("option", { value: String(n) }, n === "all" ? "すべて（出題範囲内の全地名）" : `${n} 問`));
+    }
     count.value = String(config.questionCount);
+    count.addEventListener("change", () => {
+      config.questionCount = count.value === "all" ? "all" : Number(count.value);
+    });
 
     const variants = h("fieldset", { class: "options" }, h("legend", {}, "文字の見え方"));
     for (const v of Object.keys(VARIANT_LABELS) as QuizVariant[]) {
@@ -154,39 +222,57 @@ export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap
         value.textContent = level.value;
         preview.replaceChildren(signCanvas(previewName, true));
       });
-      mosaic.append(h("div", { class: "range" }, h("span", {}, "薄い"), level, h("span", {}, "濃い"), value), preview, h("p", { class: "hint" }, `プレビュー: ${previewName}`));
+      mosaic.append(
+        h("div", { class: "range" }, h("span", {}, "薄い"), level, h("span", {}, "濃い"), value),
+        preview,
+        h("p", { class: "hint" }, `プレビュー: ${previewName}`),
+      );
     }
 
     const message = h("p", { class: "hint" });
     const start = h("button", { type: "button", class: "primary" }, "スタート");
-    const updateAvailability = () => {
-      const munis = municipalityPool(index, config.prefCode).length;
-      const towns = townMunicipalityPool(index, config.prefCode).length;
-      const canStart = config.kind === "town" ? towns > 0 : munis > 0;
-      start.disabled = !canStart;
-      message.textContent =
-        config.kind === "town" && towns === 0
-          ? "この範囲には町・大字のデータがありません"
-          : config.kind === "mixed" && towns === 0
-            ? "この範囲には町・大字のデータが無いため、市区町村だけが出題されます"
-            : config.kind === "municipality"
-              ? `出題対象: ${munis} 市区町村`
-              : `出題対象: ${munis} 市区町村（町・大字データあり ${towns}）`;
-    };
-    scope.addEventListener("change", () => {
-      config.prefCode = scope.value || null;
-      updateAvailability();
-      map.fitBBox(scopeBBox());
-    });
-    count.addEventListener("change", () => (config.questionCount = Number(count.value)));
     start.addEventListener("click", () => void startSession());
-    updateAvailability();
+
+    // 出題できる地名の数（町・大字は一覧を読み込んでから数える）
+    let availabilityToken = 0;
+    function applyScope() {
+      config.prefCodes = index.prefectures.map((p) => p.code).filter((c) => selected.has(c));
+      scopeSummary.textContent = `${config.prefCodes.length} / ${index.prefectures.length} 都道府県`;
+      fitScope();
+      void updateAvailability();
+    }
+    async function updateAvailability() {
+      const token = ++availabilityToken;
+      const munis = municipalityPool(index, config.prefCodes);
+      const muniNames = questionNames("municipality", munis, null).length;
+      start.disabled = munis.length === 0;
+      if (munis.length === 0) {
+        message.textContent = "出題範囲の都道府県を選んでください";
+        return;
+      }
+      if (config.kind === "municipality") {
+        message.textContent = `出題できる市区町村名: ${muniNames} 件`;
+        return;
+      }
+      message.textContent = "町・大字の一覧を読み込んでいます…";
+      const towns = await loadTownsIndex();
+      if (token !== availabilityToken) return;
+      const townNames = questionNames("town", munis, towns).length;
+      if (config.kind === "town") {
+        start.disabled = townNames === 0;
+        message.textContent = townNames === 0 ? "この範囲には町・大字のデータがありません" : `出題できる町・大字名: ${townNames} 件`;
+      } else {
+        message.textContent = `出題できる地名: 市区町村名 ${muniNames} 件・町・大字名 ${townNames} 件`;
+      }
+    }
 
     root.replaceChildren(
-      h("section", { class: "quiz" },
+      h(
+        "section",
+        { class: "quiz" },
         h("h2", {}, info.title),
         h("p", { class: "hint" }, info.description),
-        h("label", { class: "field" }, h("span", {}, "出題範囲"), scope),
+        scope,
         h("label", { class: "field" }, h("span", {}, "問題数"), count),
         variants,
         config.variant === "mosaic" ? mosaic : null,
@@ -194,148 +280,167 @@ export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap
         start,
       ),
     );
+    applyScope();
   }
 
   // ---- 出題 ----
   async function startSession() {
-    const canAskTown = townMunicipalityPool(index, config.prefCode).length > 0;
-    session = { questions: planKinds(config, canAskTown, rng), results: [], used: new Set() };
-    map.fitBBox(scopeBBox());
+    const munis = municipalityPool(index, config.prefCodes);
+    const towns = config.kind === "municipality" ? null : await loadTownsIndex();
+    const plan = planQuestions(config, munis, towns, rng);
+    if (plan.length === 0) return renderSetup();
+    session = { plan, munis, towns, results: [] };
+    fitScope();
     viewBeforeReveal = null;
-    await nextQuestion();
+    nextQuestion();
   }
 
-  async function buildQuestion(kind: "municipality" | "town"): Promise<Question | null> {
-    const used = session!.used;
-    if (kind === "municipality") {
-      const pool = municipalityPool(index, config.prefCode).filter((m) => !used.has(m.code));
-      const m = pickRandom(pool, rng);
-      if (!m) return null;
-      used.add(m.code);
-      const boundary = await loadDataset<FeatureCollection>(municipalityFile(m, "boundary.geojson"));
-      return {
-        kind,
-        muni: m,
-        clue: clueText(m.name, config.variant, rng),
-        target: { feature: boundary.features[0]!, bbox: m.bbox },
-        point: m.center,
-      };
-    }
-    const pool = townMunicipalityPool(index, config.prefCode);
-    // 同じ町・大字を出さないよう数回引き直す
-    for (let attempt = 0; attempt < 8; attempt++) {
-      const m = pickRandom(pool, rng);
-      if (!m) return null;
-      const towns = await loadTowns(m);
-      const areas = towns.features.filter((f) => f.properties.kind === "area" && !used.has(`${m.code}:${f.properties.name}`));
-      const area = pickRandom(areas, rng);
-      if (!area) continue;
-      const name = area.properties.name;
-      used.add(`${m.code}:${name}`);
-      const label = towns.features.find((f) => f.properties.kind === "label" && f.properties.name === name);
-      const bbox = geometryBBox(area.geometry) ?? m.bbox;
-      return {
-        kind,
-        muni: m,
-        townName: name,
-        clue: clueText(name, config.variant, rng),
-        target: { feature: area, bbox, towns, municipality: m },
-        point:
-          label?.geometry.type === "Point"
-            ? (label.geometry.coordinates as [number, number])
-            : [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2],
-      };
-    }
-    return null;
-  }
-
-  async function nextQuestion() {
+  function nextQuestion() {
     if (!session) return;
-    const i = session.results.length;
-    if (i >= session.questions.length) return renderFinish();
+    const planned = session.plan[session.results.length];
+    if (!planned) return renderFinish();
     viewBeforeReveal?.();
     viewBeforeReveal = null;
+    map.clearQuizMarks();
     map.revealLabels(false);
-    map.showQuizTarget(null);
-    map.markAnswer(null);
-    root.replaceChildren(h("section", { class: "quiz" }, h("p", { class: "hint" }, "問題を準備しています…")));
 
-    const q = (await buildQuestion(session.questions[i]!)) ?? (await buildQuestion("municipality"));
-    if (!q) return renderFinish();
-    current = q;
+    const clue = makeClue(planned.name, config.variant, rng);
+    const answers = answerCodes(planned.kind, clue, session.munis, session.towns)
+      .map((code) => findMunicipality(index, code))
+      .filter((m): m is MunicipalityEntry => m !== undefined);
+    current = { kind: planned.kind, clue, answers, attempt: new Attempt(answers.map((m) => m.code)), clicks: [] };
     answering = true;
+    renderQuestion();
+  }
 
-    const skip = h("button", { type: "button" }, "わからない");
-    skip.addEventListener("click", () => void reveal(null));
+  function renderQuestion(notice?: string) {
+    const q = current!;
+    const giveUp = h("button", { type: "button" }, "答えを見る");
+    giveUp.addEventListener("click", () => void reveal());
+    const remaining = q.attempt.total - q.attempt.marks.length;
     root.replaceChildren(
-      h("section", { class: "quiz" },
+      h(
+        "section",
+        { class: "quiz" },
         progress(),
         h("p", { class: "prompt" }, q.kind === "municipality" ? "この市区町村はどこ？" : "この町・大字がある市区町村はどこ？"),
-        h("div", { class: "sign-box" }, signCanvas(q.clue, config.variant === "mosaic")),
-        h("p", { class: "hint" }, "地図で市区町村をクリックして答えてください"),
-        h("div", { class: "actions" }, skip, quitButton()),
+        h("div", { class: "sign-box" }, signCanvas(q.clue.text, config.variant === "mosaic")),
+        h("p", { class: "count" }, `当てはまる場所: ${q.attempt.total} か所`),
+        answerBoxes(q),
+        h("p", { class: "hint" }, `地図で市区町村をクリックして答えてください（残り ${remaining} 回）`),
+        notice ? h("p", { class: "notice" }, notice) : null,
+        clickLog(q),
+        h("div", { class: "actions" }, giveUp, quitButton()),
+      ),
+    );
+  }
+
+  function clickLog(q: Question) {
+    if (q.clicks.length === 0) return null;
+    return h(
+      "ol",
+      { class: "clicks" },
+      ...q.clicks.map((c) =>
+        h(
+          "li",
+          { class: c.mark === "found" ? "ok" : "ng" },
+          h("span", { class: "mark" }, c.mark === "found" ? "○" : "×"),
+          `${c.answer.prefName} ${c.answer.name}`,
+          c.nearestKm !== null ? h("small", {}, `最も近い正解まで ${formatKm(c.nearestKm)}`) : null,
+        ),
       ),
     );
   }
 
   function onAnswer(answer: QuizAnswer) {
-    if (answering) void reveal(answer);
-  }
-
-  async function judge(q: Question, answer: QuizAnswer): Promise<{ correct: boolean; sameNameElsewhere: boolean }> {
-    if (q.kind === "municipality") {
-      const correct = isCorrectMunicipality(q.muni, answer);
-      return { correct, sameNameElsewhere: correct && answer.code !== q.muni.code };
+    const q = current;
+    if (!answering || !q) return;
+    const mark = q.attempt.click(answer.code);
+    if (mark === "duplicate") {
+      renderQuestion("その市区町村はもう選んでいます");
+      return;
     }
-    if (answer.code === q.muni.code) return { correct: true, sameNameElsewhere: false };
-    // 同じ名前の町・大字が回答した市区町村にもあれば正解（看板の文字だけでは区別できない）
-    const clicked = findMunicipality(index, answer.code);
-    if (!clicked?.hasTowns) return { correct: false, sameNameElsewhere: false };
-    const towns = await loadTowns(clicked);
-    const found = towns.features.some((f) => f.properties.kind === "area" && f.properties.name === q.townName);
-    return { correct: found, sameNameElsewhere: found };
+    const nearestKm =
+      mark === "wrong" ? Math.min(...q.answers.map((m) => distanceKm(answer.lngLat, m.center))) : null;
+    q.clicks.push({ answer, mark, nearestKm });
+    map.setQuizMark(answer.code, mark);
+    map.addMarker(answer.lngLat, QUIZ_MARK_COLORS[mark]);
+    if (q.attempt.done) void reveal();
+    else renderQuestion();
   }
 
-  async function reveal(answer: QuizAnswer | null) {
+  async function reveal() {
     const q = current;
     if (!session || !q || !answering) return;
     answering = false;
-    const { correct, sameNameElsewhere } = answer ? await judge(q, answer) : { correct: false, sameNameElsewhere: false };
-    const distance = answer && !correct ? distanceKm(answer.lngLat, q.point) : null;
-    session.results.push({ question: q, correct, answer, distanceKm: distance });
+    session.results.push(q);
 
-    // 正解の場所（とクリックした位置）が入るように地図を動かす。
-    // 町・大字は小さいので、どの市区町村にあるか分かるよう市区町村全体を映す
+    for (const m of q.answers) if (!q.attempt.found.has(m.code)) map.setQuizMark(m.code, "missed");
+    map.revealLabels(true);
+
+    // 正解の場所とクリックした位置がすべて入るように地図を動かす
     const center = map.map.getCenter();
     const zoom = map.map.getZoom();
     viewBeforeReveal = () => map.map.jumpTo({ center, zoom });
-    map.showQuizTarget(q.target);
-    map.markAnswer(answer?.lngLat ?? null);
-    map.revealLabels(true);
-    const b = [...(q.kind === "town" ? q.muni.bbox : q.target.bbox)] as BBox;
-    if (answer && !sameNameElsewhere) {
-      b[0] = Math.min(b[0], answer.lngLat[0]);
-      b[1] = Math.min(b[1], answer.lngLat[1]);
-      b[2] = Math.max(b[2], answer.lngLat[0]);
-      b[3] = Math.max(b[3], answer.lngLat[1]);
-    }
-    map.fitBBox(b);
+    const points = q.clicks.map((c) => c.answer.lngLat);
+    const boxes = q.answers.map((m) => m.bbox);
+    map.fitBBox([
+      Math.min(...boxes.map((b) => b[0]), ...points.map((p) => p[0])),
+      Math.min(...boxes.map((b) => b[1]), ...points.map((p) => p[1])),
+      Math.max(...boxes.map((b) => b[2]), ...points.map((p) => p[0])),
+      Math.max(...boxes.map((b) => b[3]), ...points.map((p) => p[1])),
+    ]);
 
-    const place = [prefName.get(q.muni.code.slice(0, 2)), q.muni.name, q.townName].filter(Boolean).join(" ");
-    const last = session.results.length >= session.questions.length;
-    const next = h("button", { type: "button", class: "primary" }, last ? "結果を見る" : "次の問題");
-    next.addEventListener("click", () => void nextQuestion());
-    root.replaceChildren(
-      h("section", { class: "quiz" },
-        progress(),
-        h("p", { class: `verdict ${correct ? "ok" : "ng"}` }, correct ? "○ 正解" : answer ? "× 不正解" : "– スキップ"),
-        h("div", { class: "sign-box" }, signCanvas(q.townName ?? q.muni.name, false)),
-        h("dl", {},
-          h("dt", {}, "正解"), h("dd", {}, place),
-          ...(answer ? [h("dt", {}, "あなたの回答"), h("dd", {}, `${answer.prefName} ${answer.name}`)] : []),
-          ...(distance !== null ? [h("dt", {}, "距離"), h("dd", {}, `${formatKm(distance)} 離れています`)] : []),
+    // 町・大字の問題は、当てはまる町・大字の区域も示す
+    const townNames = new Map<string, string[]>();
+    if (q.kind === "town" && session.towns) {
+      for (const m of q.answers) townNames.set(m.code, (session.towns[m.code] ?? []).filter((n) => clueMatches(q.clue, n)));
+      const shown = q.answers.slice(0, MAX_AREA_REVEAL);
+      const collections = await Promise.all(shown.map(loadTownAreas));
+      if (current !== q) return;
+      map.showQuizAreas(
+        collections.flatMap((fc, i) =>
+          fc.features.filter(
+            (f) => f.properties.kind === "area" && townNames.get(shown[i]!.code)?.includes(f.properties.name),
+          ),
         ),
-        sameNameElsewhere ? h("p", { class: "hint" }, "回答した市区町村にも同じ名前の地名があるので正解です") : null,
+      );
+    }
+
+    const perfect = q.attempt.perfect;
+    const last = session.results.length >= session.plan.length;
+    const next = h("button", { type: "button", class: "primary" }, last ? "結果を見る" : "次の問題");
+    next.addEventListener("click", nextQuestion);
+    root.replaceChildren(
+      h(
+        "section",
+        { class: "quiz" },
+        progress(),
+        h(
+          "p",
+          { class: `verdict ${perfect ? "ok" : q.attempt.found.size > 0 ? "partial" : "ng"}` },
+          perfect ? "◎ 完全解答！" : `${q.attempt.found.size} / ${q.attempt.total} か所 正解`,
+        ),
+        h("div", { class: "sign-box" }, signCanvas(q.clue.name, false)),
+        answerBoxes(q),
+        h("p", { class: "count" }, "正解の場所"),
+        h(
+          "ol",
+          { class: "answers" },
+          ...q.answers.map((m) => {
+            const found = q.attempt.found.has(m.code);
+            const names = townNames.get(m.code);
+            return h(
+              "li",
+              { class: found ? "ok" : "missed" },
+              h("span", { class: "mark" }, found ? "○" : "－"),
+              placeName(m),
+              names && names.length > 0 ? h("small", {}, names.join("・")) : null,
+            );
+          }),
+        ),
+        q.clicks.length > 0 ? h("p", { class: "count" }, "あなたの回答") : null,
+        clickLog(q),
         h("div", { class: "actions" }, next, quitButton()),
       ),
     );
@@ -348,25 +453,33 @@ export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap
     answering = false;
     viewBeforeReveal?.();
     viewBeforeReveal = null;
-    map.showQuizTarget(null);
-    map.markAnswer(null);
+    map.clearQuizMarks();
     map.revealLabels(false);
     const results = session.results;
-    const score = { correct: results.filter((r) => r.correct).length, answered: results.length };
+    const perfect = results.filter((q) => q.attempt.perfect).length;
+    const found = results.reduce((n, q) => n + q.attempt.found.size, 0);
+    const total = results.reduce((n, q) => n + q.attempt.total, 0);
     const again = h("button", { type: "button", class: "primary" }, "もう一度");
     again.addEventListener("click", () => void startSession());
     const back = h("button", { type: "button" }, "設定に戻る");
     back.addEventListener("click", renderSetup);
     root.replaceChildren(
-      h("section", { class: "quiz" },
+      h(
+        "section",
+        { class: "quiz" },
         h("h2", {}, "結果"),
-        h("p", { class: "score" }, scoreLabel(score)),
-        h("ol", { class: "results" },
-          ...results.map((r) =>
-            h("li", { class: r.correct ? "ok" : "ng" },
-              h("span", { class: "mark" }, r.correct ? "○" : "×"),
-              h("span", {}, [r.question.muni.name, r.question.townName].filter(Boolean).join(" ")),
-              r.distanceKm !== null ? h("small", {}, formatKm(r.distanceKm)) : null,
+        h("p", { class: "score" }, `完全解答 ${perfect} / ${results.length} 問`),
+        h("p", { class: "hint" }, `当てた場所: ${found} / ${total} か所`),
+        h(
+          "ol",
+          { class: "results" },
+          ...results.map((q) =>
+            h(
+              "li",
+              { class: q.attempt.perfect ? "ok" : "ng" },
+              h("span", { class: "mark" }, q.attempt.perfect ? "◎" : "×"),
+              q.clue.name,
+              h("small", {}, `${q.attempt.found.size} / ${q.attempt.total}`),
             ),
           ),
         ),
@@ -377,11 +490,9 @@ export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap
 
   function progress() {
     const s = session!;
-    const correct = s.results.filter((r) => r.correct).length;
-    return h("p", { class: "progress" },
-      `第 ${Math.min(s.results.length + (answering ? 1 : 0), s.questions.length)} 問 / ${s.questions.length}`,
-      h("small", {}, `正解 ${correct}`),
-    );
+    const perfect = s.results.filter((q) => q.attempt.perfect).length;
+    const number = s.results.length + (answering ? 1 : 0);
+    return h("p", { class: "progress" }, `第 ${number} 問 / ${s.plan.length}`, h("small", {}, `完全解答 ${perfect}`));
   }
 
   function quitButton() {

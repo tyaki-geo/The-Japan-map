@@ -63,3 +63,6 @@ export interface PrefectureProps {
  * - label: 区域内の名称表示位置
  */
 export type TownProps = { kind: "area"; name: string; count: number } | { kind: "label"; name: string };
+
+/** towns-index.json: 市区町村コード -> その市区町村の町・大字名 */
+export type TownsIndex = Record<string, string[]>;
