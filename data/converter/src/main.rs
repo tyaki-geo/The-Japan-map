@@ -432,6 +432,20 @@ fn write_outputs(
     };
     output::write_json(&out.join("index.json"), &index)?;
 
+    // 町・大字名の一覧（市区町村コード -> 名前）。クイズで同じ名前の地名を探すのに使う
+    let towns_index: BTreeMap<&str, Vec<&str>> = munis
+        .iter()
+        .zip(towns)
+        .filter(|(_, areas)| !areas.is_empty())
+        .map(|(m, areas)| {
+            (
+                m.code.as_str(),
+                areas.iter().map(|a| a.name.as_str()).collect(),
+            )
+        })
+        .collect();
+    output::write_json(&out.join("towns-index.json"), &towns_index)?;
+
     // 全体表示用
     let muni_features: Vec<Value> = munis
         .iter()
