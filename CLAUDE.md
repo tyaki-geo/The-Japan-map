@@ -19,6 +19,7 @@ cargo clippy --manifest-path data/converter/Cargo.toml --all-targets -- -D warni
 - main はルールセット（`.github/protect-main.json`）で保護されている。直接 push せず、ブランチを切って PR を出す。レビューは CODEOWNERS（`@tyaki-geo`）。PR 本文は `.github/pull_request_template.md` に沿って書く
 - 本人（`tyaki-geo`）の PR はレビューのしようがないので、ルールセットの例外（リポジトリ管理者、`bypass_mode: pull_request`）で通す。マージ画面で「Merge without waiting for requirements to be met (bypass rules)」にチェックを入れてマージする。例外は PR のマージ時だけで、main への直接 push は本人でもできない
 - push は SSH の `tyaki` ホスト（`git@tyaki:tyaki-geo/The-Japan-map.git`）
+- CI（`.github/workflows/ci.yml`）は同じ PR の古い実行を自動で取り消す。GitHub 側の障害などで待ち状態のまま止まったら、PR に新しいコミットを push するか、Actions 画面から手動で実行する（workflow_dispatch）。実行環境は `ubuntu-24.04` に固定している
 - `data/raw/` は git 管理外（zip を置くだけ）。`data/edited/` はコミットする（Pages のビルドがこれを使う）
 - 依存パッケージ（npm / crate）は公開から2週間以上経った版を完全一致で固定する（npm は `--save-exact`、Cargo は `=x.y.z`）
 
@@ -37,7 +38,8 @@ cargo clippy --manifest-path data/converter/Cargo.toml --all-targets -- -D warni
 - `src/sidebar.ts` 勉強モード（一覧・検索・情報パネル・レイヤ）
 - `src/game.ts` クイズモード（設定・出題・答え合わせ・結果）
   - `src/lib/quiz.ts` 出題ロジック（出題範囲、文字欠け、正誤、モザイクの濃さ）。DOM に依存しないのでテストしやすい
-  - `src/lib/mosaic.ts` 手がかりの地名を看板風に描き、モザイクをかける
+  - `src/lib/mosaic.ts` 手がかりの地名を看板風に描き、横から見た形にし、モザイクをかける
+  - `src/lib/perspective.ts` 看板を横から見たときの透視投影（画面の列ごとに、看板のどの列が何倍で映るか）
 - 出力形式の詳細は `data/README.md`
 
 ## 入力データ
@@ -103,6 +105,11 @@ cargo clippy --manifest-path data/converter/Cargo.toml --all-targets -- -D warni
 - 文字の見え方（カメラの画質や看板までの距離で読みにくい状況を再現する）
   - 通常 / 文字欠け（1文字を ○×△□◇☆ のどれかに置き換える。市区町村の末尾の市・区・町・村は伏せない）/ モザイク（看板の文字にモザイク。濃さ1〜10、設定画面で新宿区の看板でプレビュー）
   - **モザイクは地図や区域ではなく文字にかける**（ユーザーの方針）
+- 看板を見る角度（実際のプレーでは看板を横からしか見られないことがあるため）
+  - 通常とモザイクで使い、文字欠けでは使わない
+  - プレイヤーは角度の大きさ（0〜80°、5°刻み、初期値 0° = 正面）だけを選ぶ。右からか左からかは出題ごとに半々のランダム（ユーザーの方針）
+  - 看板を縦の軸で回し、カメラに映る形を透視投影で描く（`src/lib/perspective.ts`）。モザイクは映った画像の方にかける
+  - 設定画面のプレビュー（新宿区）にモザイクの濃さと角度を反映する（例として左から見た形）。答え合わせの看板は正面
 - 1問は「1つの地名（看板の文字）」で、同じ名前は1問にまとめる。看板の文字に当てはまる場所は出題範囲内のすべてが正解
   - 同じ名前の市区町村・町・大字（例: 府中市は東京都と広島県）、文字欠けで伏せた1文字に何が入っても成り立つ名前（例: 新○市 → 新座市・新見市…）
   - 町・大字の問題は、当てはまる名前がある市区町村が正解（全国の町・大字名は `towns-index.json` で引く）

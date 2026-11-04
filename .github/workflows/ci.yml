@@ -4,10 +4,19 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Actions 画面から手動でも実行できるようにする
+  workflow_dispatch:
+
+# 同じブランチ（PR）で新しい実行が始まったら、古い実行は取り消す。
+# GitHub 側の障害などで待ち状態のまま止まった実行も、次の push で片付く
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # ubuntu-latest は版の切り替え中に挙動が変わりうるので、版を固定する
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -21,7 +30,7 @@ jobs:
 
   # data/raw -> data/edited の変換コード（Rust）
   converter:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: data/converter

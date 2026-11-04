@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   Attempt,
+  VIEW_ANGLE_MAX,
+  signedViewAngle,
+  usesViewAngle,
   REGIONS,
   clampQuestionCount,
   percentFromQuestionCount,
@@ -78,6 +81,7 @@ const config = (kind: QuizConfig["kind"], questionCount: QuizConfig["questionCou
   prefCodes: ALL,
   questionCount,
   mosaicLevel: 4,
+  viewAngle: 0,
 });
 
 const exact = (name: string): Clue => ({ name, text: name, wildcard: null });
@@ -240,5 +244,29 @@ describe("問題数", () => {
     expect(percentFromQuestionCount(91, 91)).toBe(100);
     expect(percentFromQuestionCount(1, 1000)).toBe(1);
     expect(percentFromQuestionCount(46, 91)).toBe(51);
+  });
+});
+
+describe("横から見る角度", () => {
+  it("大きさは選んだ角度、向きは左右ほぼ半々", () => {
+    const rng = createRng(11);
+    const angles = Array.from({ length: 400 }, () => signedViewAngle(40, "normal", rng));
+    expect(new Set(angles.map(Math.abs))).toEqual(new Set([40]));
+    const right = angles.filter((a) => a > 0).length;
+    expect(right).toBeGreaterThan(150);
+    expect(right).toBeLessThan(250);
+  });
+
+  it("モザイクでも使い、文字欠けでは使わない", () => {
+    expect(usesViewAngle("normal")).toBe(true);
+    expect(usesViewAngle("mosaic")).toBe(true);
+    expect(usesViewAngle("masked")).toBe(false);
+    expect(Math.abs(signedViewAngle(30, "mosaic", createRng(1)))).toBe(30);
+    expect(signedViewAngle(30, "masked", createRng(1))).toBe(0);
+  });
+
+  it("0° は正面、範囲外は上限に収める", () => {
+    expect(signedViewAngle(0, "normal", createRng(1))).toBe(0);
+    expect(Math.abs(signedViewAngle(999, "normal", createRng(1)))).toBe(VIEW_ANGLE_MAX);
   });
 });
