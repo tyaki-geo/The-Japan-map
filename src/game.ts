@@ -9,6 +9,8 @@ import {
   Attempt,
   MOSAIC_LEVEL_MAX,
   MOSAIC_LEVEL_MIN,
+  VIEW_ANGLE_MAX,
+  VIEW_ANGLE_STEP,
   DEFAULT_QUESTION_PERCENT,
   REGIONS,
   answerCodes,
@@ -21,7 +23,9 @@ import {
   planQuestions,
   questionCountFromPercent,
   questionNames,
+  signedViewAngle,
   toggleRegion,
+  usesViewAngle,
   type Clue,
   type Mark,
   type PlannedQuestion,
@@ -77,6 +81,8 @@ interface Question {
   answers: MunicipalityEntry[];
   attempt: Attempt;
   clicks: Click[];
+  /** 看板を横から見る角度 [度]（符号は左右。0 は正面） */
+  yaw: number;
 }
 
 /** 答え合わせで示す正解の場所（看板1枚に対応） */
@@ -107,6 +113,7 @@ export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap
     prefCodes: index.prefectures.map((p) => p.code),
     questionCount: 1,
     mosaicLevel: 4,
+    viewAngle: 0,
   };
   const prefName = new Map(index.prefectures.map((p) => [p.code, p.name]));
   const townAreasCache = new Map<string, Promise<TownCollection>>();
@@ -158,11 +165,15 @@ export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap
     if (b) map.fitBBox(b);
   };
 
-  const signCanvas = (text: string, mosaic: boolean, size = SIGN_SIZE) => {
+  const signCanvas = (text: string, mosaic: boolean, size = SIGN_SIZE, yawDeg = 0) => {
     // 読み上げ用の説明。モザイクのときは文字を出すと答えが分かるので伏せる
     const label = mosaic ? "モザイクのかかった看板" : `看板: ${text}`;
     const canvas = h("canvas", { class: "sign", role: "img", "aria-label": label });
-    drawSign(canvas, text, { ...size, mosaicRatio: mosaic ? mosaicBlockRatio(config.mosaicLevel) : undefined });
+    drawSign(canvas, text, {
+      ...size,
+      mosaicRatio: mosaic ? mosaicBlockRatio(config.mosaicLevel) : undefined,
+      yawDeg,
+    });
     return canvas;
   };
 
@@ -311,6 +322,16 @@ export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap
       variants.append(h("label", {}, radio, VARIANT_LABELS[v]));
     }
 
+    // 看板のプレビュー（モザイクの濃さ・横から見る角度を反映）。出題では左右がランダムなので、例として左から見た形を出す
+    const preview = h("div", { class: "sign-preview" });
+    const previewCaption = h("p", { class: "hint" });
+    const renderPreview = () => {
+      const yaw = usesViewAngle(config.variant) ? config.viewAngle : 0;
+      preview.replaceChildren(signCanvas(previewName, config.variant === "mosaic", SIGN_SIZE, yaw));
+      previewCaption.textContent = `プレビュー: ${previewName}${yaw > 0 ? `（左から ${yaw}° で見た例）` : ""}`;
+    };
+    renderPreview();
+
     const mosaic = h("fieldset", { class: "options mosaic" }, h("legend", {}, "モザイクの濃さ"));
     if (config.variant === "mosaic") {
       const level = h("input", {
@@ -322,18 +343,38 @@ export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap
       });
       level.value = String(config.mosaicLevel);
       const value = h("output", {}, String(config.mosaicLevel));
-      const preview = h("div", { class: "sign-preview" }, signCanvas(previewName, true));
       level.addEventListener("input", () => {
         config.mosaicLevel = Number(level.value);
         value.textContent = level.value;
-        preview.replaceChildren(signCanvas(previewName, true));
+        renderPreview();
       });
-      mosaic.append(
-        h("div", { class: "range" }, h("span", {}, "薄い"), level, h("span", {}, "濃い"), value),
-        preview,
-        h("p", { class: "hint" }, `プレビュー: ${previewName}`),
+      mosaic.append(h("div", { class: "range" }, h("span", {}, "薄い"), level, h("span", {}, "濃い"), value));
+    }
+
+    // 看板を横から見る角度（大きさだけ選ぶ。右からか左からかは出題ごとにランダム）
+    const angle = h("fieldset", { class: "options view-angle" }, h("legend", {}, "看板を見る角度"));
+    if (usesViewAngle(config.variant)) {
+      const slider = h("input", {
+        type: "range",
+        min: "0",
+        max: String(VIEW_ANGLE_MAX),
+        step: String(VIEW_ANGLE_STEP),
+        "aria-label": "看板を見る角度",
+      });
+      slider.value = String(config.viewAngle);
+      const value = h("output", {}, `${config.viewAngle}°`);
+      slider.addEventListener("input", () => {
+        config.viewAngle = Number(slider.value);
+        value.textContent = `${slider.value}°`;
+        renderPreview();
+      });
+      angle.append(
+        h("div", { class: "range" }, h("span", {}, "正面"), slider, h("span", {}, "真横"), value),
+        h("p", { class: "hint" }, "右から見るか左から見るかは、出題ごとにランダムに決まります"),
       );
     }
+
+    const previewBox = h("div", { class: "preview" }, preview, previewCaption);
 
     const message = h("p", { class: "hint" });
     const start = h("button", { type: "button", class: "primary" }, "スタート");
@@ -393,6 +434,8 @@ export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap
         count,
         variants,
         config.variant === "mosaic" ? mosaic : null,
+        usesViewAngle(config.variant) ? angle : null,
+        usesViewAngle(config.variant) ? previewBox : null,
         message,
         start,
       ),
@@ -426,7 +469,14 @@ export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap
     const answers = answerCodes(planned.kind, clue, session.munis, session.towns)
       .map((code) => findMunicipality(index, code))
       .filter((m): m is MunicipalityEntry => m !== undefined);
-    current = { kind: planned.kind, clue, answers, attempt: new Attempt(answers.map((m) => m.code)), clicks: [] };
+    current = {
+      kind: planned.kind,
+      clue,
+      answers,
+      attempt: new Attempt(answers.map((m) => m.code)),
+      clicks: [],
+      yaw: signedViewAngle(config.viewAngle, config.variant, rng),
+    };
     answering = true;
     renderQuestion();
   }
@@ -442,7 +492,7 @@ export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap
         { class: "quiz" },
         progress(),
         h("p", { class: "prompt" }, q.kind === "municipality" ? "この市区町村はどこ？" : "この町・大字がある市区町村はどこ？"),
-        h("div", { class: "sign-box" }, signCanvas(q.clue.text, config.variant === "mosaic")),
+        h("div", { class: "sign-box" }, signCanvas(q.clue.text, config.variant === "mosaic", SIGN_SIZE, q.yaw)),
         h("p", { class: "count" }, `当てはまる場所: ${q.attempt.total} か所`),
         answerBoxes(q),
         h("p", { class: "hint" }, `地図で市区町村をクリックして答えてください（残り ${remaining} 回）`),

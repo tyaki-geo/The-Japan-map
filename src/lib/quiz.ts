@@ -24,6 +24,8 @@ export interface QuizConfig {
   questionCount: QuestionCount;
   /** モザイクの濃さ（1〜10） */
   mosaicLevel: number;
+  /** 看板を横から見る角度の大きさ [度]（0 は正面）。左右どちらからかは出題ごとにランダム */
+  viewAngle: number;
 }
 
 /** 出題範囲をまとめて選ぶ地方（都道府県コード） */
@@ -73,6 +75,8 @@ export function percentFromQuestionCount(count: number, total: number): number {
 export const MASK_SYMBOLS = ["○", "×", "△", "□", "◇", "☆"] as const;
 export const MOSAIC_LEVEL_MIN = 1;
 export const MOSAIC_LEVEL_MAX = 10;
+export const VIEW_ANGLE_MAX = 80;
+export const VIEW_ANGLE_STEP = 5;
 
 /** 出題に使わない市区町村（所属未定地や名前の無いもの） */
 const QUIZ_MUNI_TYPES = new Set(["郡市・東京都の区", "町村・指定都市の区"]);
@@ -248,4 +252,19 @@ export function mosaicBlockRatio(level: number): number {
   const l = Math.min(MOSAIC_LEVEL_MAX, Math.max(MOSAIC_LEVEL_MIN, Math.round(level)));
   // 1: 文字の高さの 1/30（ほぼ読める）〜 10: 1/3（ほぼ読めない）
   return l / 30;
+}
+
+/** 横から見る角度を使える見え方（文字欠けでは使わない） */
+export function usesViewAngle(variant: QuizVariant): boolean {
+  return variant !== "masked";
+}
+
+/**
+ * 1問ごとの看板の向き [度]。大きさはプレイヤーが選んだ角度、符号（右から / 左から）は半々のランダム。
+ * 文字欠けや正面（0°）では 0
+ */
+export function signedViewAngle(angle: number, variant: QuizVariant, rng: Rng): number {
+  const a = Math.min(VIEW_ANGLE_MAX, Math.max(0, angle));
+  if (!usesViewAngle(variant) || a === 0) return 0;
+  return rng() < 0.5 ? -a : a;
 }
