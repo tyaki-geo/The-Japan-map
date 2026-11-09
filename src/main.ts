@@ -3,17 +3,19 @@ import { loadIndex } from "./lib/data";
 import { h } from "./lib/dom";
 import type { QuizKind } from "./lib/quiz";
 import { findMunicipality } from "./lib/search";
+import { createAreaCodeGame } from "./areacode";
 import { createGame } from "./game";
 import { createMap } from "./map";
 import { createSidebar } from "./sidebar";
 
-type Mode = "study" | QuizKind;
+type Mode = "study" | QuizKind | "areacode";
 
 const MODES: { mode: Mode; label: string }[] = [
   { mode: "study", label: "勉強モード" },
   { mode: "municipality", label: "市区町村当て" },
   { mode: "town", label: "地名当て" },
   { mode: "mixed", label: "ミックス" },
+  { mode: "areacode", label: "市外局番" },
 ];
 
 async function main(app: HTMLElement) {
@@ -59,6 +61,7 @@ async function main(app: HTMLElement) {
     onToggleLayer: (group, visible) => map.setGroupVisible(group, visible),
   });
   const game = createGame(quizEl, index, map);
+  const areaCodeGame = createAreaCodeGame(quizEl, index, map);
   // 開発時だけ、ブラウザのコンソールや自動テストから地図を操作できるようにする
   if (import.meta.env.DEV) Object.assign(window, { __japanMap: map.map });
 
@@ -93,7 +96,8 @@ async function main(app: HTMLElement) {
       applyHash();
     } else {
       document.title = `${MODES.find((m) => m.mode === next)!.label} - The Japan Map`;
-      game.show(next);
+      if (next === "areacode") areaCodeGame.show();
+      else game.show(next);
     }
   }
 

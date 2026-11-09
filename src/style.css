@@ -628,3 +628,8 @@ body {
     border-top: 1px solid var(--border);
   }
 }
+
+/* モードのボタンが奇数のとき、最後の1つは横いっぱいに */
+.modes button:last-child:nth-child(odd) {
+  grid-column: 1 / -1;
+}
