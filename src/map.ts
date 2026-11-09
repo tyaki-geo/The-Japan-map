@@ -21,6 +21,12 @@ export const LAYER_GROUPS = {
 } as const;
 export type LayerGroup = keyof typeof LAYER_GROUPS;
 
+/** 距離感覚のクイズで測った線: measured は起点からクリック位置まで、extension はクリック位置から正解の距離の地点まで（届かなかったとき） */
+export interface DistanceLines {
+  measured: [number, number][];
+  extension: [number, number][] | null;
+}
+
 /** クイズで市区町村に付ける色: 当たり / はずれ / 答え合わせで示す取り逃した正解 */
 export type QuizMark = "found" | "wrong" | "missed";
 
@@ -36,13 +42,15 @@ export interface JapanMap {
   setGroupVisible(group: LayerGroup, visible: boolean): void;
   fitBBox(bbox: BBox): void;
   /** クイズ中はラベル・名前のホバー表示・クリック選択を止め、クリックを回答として渡す */
-  setQuizMode(on: boolean, onAnswer?: (answer: QuizAnswer) => void): void;
+  setQuizMode(on: boolean, onAnswer?: (answer: QuizAnswer) => void, onPoint?: (lngLat: [number, number]) => void): void;
+  /** 距離感覚のクイズで、起点とクリック位置を結んだ線を示す（null で消す） */
+  showDistanceLines(lines: DistanceLines | null): void;
   /** 市区町村に当たり・はずれなどの色を付ける（null で消す） */
   setQuizMark(code: string, mark: QuizMark | null): void;
   /** 答え合わせで町・大字の区域を強調する（空配列で消す） */
   showQuizAreas(features: Feature[]): void;
-  /** クリックした位置に印を付ける */
-  addMarker(lngLat: [number, number], color: string): void;
+  /** クリックした位置に印を付ける。返す関数でその印だけを消せる */
+  addMarker(lngLat: [number, number], color: string): () => void;
   /** 色・印・強調をすべて消す */
   clearQuizMarks(): void;
   /** 範囲へ動き、着いたら解決する（答え合わせで正解地点を巡る） */
@@ -112,6 +120,7 @@ export function createMap(
         selected: { type: "geojson", data: EMPTY },
         towns: { type: "geojson", data: EMPTY, generateId: true },
         "quiz-target": { type: "geojson", data: EMPTY },
+        "distance-line": { type: "geojson", data: EMPTY },
       },
       layers: [
         // 背景地図は使わず、陸地（市区町村の塗り）以外を海の色にする
@@ -194,6 +203,21 @@ export function createMap(
           paint: { "line-color": "#a04000", "line-width": 3 },
         },
         {
+          id: "distance-line",
+          type: "line",
+          source: "distance-line",
+          filter: ["==", ["get", "kind"], "measured"],
+          layout: { "line-cap": "round" },
+          paint: { "line-color": "#1f6feb", "line-width": 3 },
+        },
+        {
+          id: "distance-extension",
+          type: "line",
+          source: "distance-line",
+          filter: ["==", ["get", "kind"], "extension"],
+          paint: { "line-color": "#1f6feb", "line-width": 3, "line-dasharray": [2, 2] },
+        },
+        {
           id: "towns-label",
           type: "symbol",
           source: "towns",
@@ -229,6 +253,7 @@ export function createMap(
   let selected: string | null = null;
   let quiz = false;
   let onQuizAnswer: ((answer: QuizAnswer) => void) | undefined;
+  let onQuizPoint: ((lngLat: [number, number]) => void) | undefined;
   let markers: maplibregl.Marker[] = [];
   const markedCodes = new Set<string>();
   let labelsRevealed = false;
@@ -289,6 +314,11 @@ export function createMap(
       onSelect(f ? String(f.properties.code) : null);
       return;
     }
+    // 距離感覚のクイズは、海の上など市区町村の外でも位置を受け取る
+    if (onQuizPoint) {
+      onQuizPoint([e.lngLat.lng, e.lngLat.lat]);
+      return;
+    }
     if (f && onQuizAnswer) {
       onQuizAnswer({
         code: String(f.properties.code),
@@ -319,9 +349,10 @@ export function createMap(
       groupVisible[group] = visible;
       applyVisibility();
     },
-    setQuizMode(on, onAnswer) {
+    setQuizMode(on, onAnswer, onPoint) {
       quiz = on;
       onQuizAnswer = on ? onAnswer : undefined;
+      onQuizPoint = on ? onPoint : undefined;
       labelsRevealed = false;
       clearHover();
       api.select(null);
@@ -333,11 +364,24 @@ export function createMap(
       if (mark) markedCodes.add(code);
       else markedCodes.delete(code);
     },
+    showDistanceLines(lines) {
+      const line = (kind: string, coordinates: [number, number][]): Feature => ({
+        type: "Feature",
+        properties: { kind },
+        geometry: { type: "LineString", coordinates },
+      });
+      const features = lines
+        ? [line("measured", lines.measured), ...(lines.extension ? [line("extension", lines.extension)] : [])]
+        : [];
+      source("distance-line").setData({ type: "FeatureCollection", features });
+    },
     showQuizAreas(features) {
       source("quiz-target").setData({ type: "FeatureCollection", features });
     },
     addMarker(lngLat, color) {
-      markers.push(new maplibregl.Marker({ color, scale: 0.8 }).setLngLat(lngLat).addTo(map));
+      const marker = new maplibregl.Marker({ color, scale: 0.8 }).setLngLat(lngLat).addTo(map);
+      markers.push(marker);
+      return () => marker.remove();
     },
     flyToBBox(bbox, maxZoom) {
       const duration = 1200;
@@ -364,6 +408,7 @@ export function createMap(
       for (const m of markers) m.remove();
       markers = [];
       source("quiz-target").setData(EMPTY);
+      source("distance-line").setData(EMPTY);
     },
     revealLabels(on) {
       labelsRevealed = on;
