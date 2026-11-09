@@ -1,4 +1,5 @@
-// 距離感覚モード: 市区町村の代表点から直線で ○km の地点を地図でクリックして答える
+// 距離感覚モード: 市区町村の庁舎から直線で ○km の地点を地図でクリックして答える
+import { loadDataset } from "./lib/data";
 import { h } from "./lib/dom";
 import {
   DEFAULT_DISTANCE_QUESTIONS,
@@ -13,6 +14,7 @@ import {
   clampRange,
   formatDistance,
   measure,
+  originPool,
   planDistanceQuestions,
   type DistanceQuestion,
   type Measurement,
@@ -21,7 +23,7 @@ import { greatCircleLine } from "./lib/geo";
 import { municipalityPool, type Rng } from "./lib/quiz";
 import { createScopePicker } from "./scope";
 import type { JapanMap } from "./map";
-import type { DatasetIndex } from "./types";
+import type { DatasetIndex, OfficesIndex } from "./types";
 
 /** 地図の印の色: 起点 / 選んだ位置 / 正解の距離の地点 */
 const MARKER_COLORS = { origin: "#24292f", pick: "#1f6feb", correct: "#2da44e" } as const;
@@ -53,6 +55,13 @@ export function createDistanceGame(root: HTMLElement, index: DatasetIndex, map: 
   const prefName = new Map(index.prefectures.map((p) => [p.code, p.name]));
   const placeName = (code: string, name: string) => `${prefName.get(code.slice(0, 2)) ?? ""} ${name}`;
 
+  let officesPromise: Promise<OfficesIndex> | null = null;
+  const loadOffices = () => (officesPromise ??= loadDataset<OfficesIndex>("offices.json"));
+  /** 庁舎の位置（読み込むまでは null）。起点にできるのは庁舎のある市区町村だけ */
+  let offices: OfficesIndex | null = null;
+  /** 設定画面を作り直したり閉じたりしたら進める（遅れて届いた読み込みの結果で画面を触らないため） */
+  let setupToken = 0;
+
   let session: Session | null = null;
   let current: DistanceQuestion | null = null;
   let answering = false;
@@ -79,9 +88,14 @@ export function createDistanceGame(root: HTMLElement, index: DatasetIndex, map: 
     const start = h("button", { type: "button", class: "primary" }, "スタート");
     const scopePicker = createScopePicker(index, config.prefCodes, (codes) => {
       config.prefCodes = codes;
-      const n = municipalityPool(index, codes).length;
-      start.disabled = n === 0;
-      message.textContent = n === 0 ? "出題範囲の都道府県を選んでください" : `起点にできる市区町村: ${n} 件`;
+      if (!offices) {
+        start.disabled = true;
+        message.textContent = "庁舎の位置を読み込んでいます…";
+      } else {
+        const n = originPool(municipalityPool(index, codes), offices).length;
+        start.disabled = n === 0;
+        message.textContent = n === 0 ? "出題範囲の都道府県を選んでください" : `起点にできる市区町村: ${n} 件`;
+      }
       const prefs = index.prefectures.filter((p) => codes.includes(p.code));
       if (prefs.length > 0) {
         map.fitBBox([
@@ -137,7 +151,7 @@ export function createDistanceGame(root: HTMLElement, index: DatasetIndex, map: 
         h(
           "p",
           { class: "hint" },
-          "市区町村の代表点から直線で ○km の地点を、地図をクリックして答えます。実際の道のりは直線より長くなるので、あくまで地図上の距離の感覚です。",
+          "市区町村の庁舎から直線で ○km の地点を、地図をクリックして答えます。実際の道のりは直線より長くなるので、あくまで地図上の距離の感覚です。",
         ),
         scopePicker.element,
         count,
@@ -147,12 +161,24 @@ export function createDistanceGame(root: HTMLElement, index: DatasetIndex, map: 
       ),
     );
     scopePicker.refresh();
+    const token = ++setupToken;
+    void loadOffices().then((o) => {
+      offices = o;
+      if (token === setupToken) scopePicker.refresh();
+    });
   }
 
   // ---- 出題 ----
   function startSession() {
+    if (!offices) return;
     const range = clampRange({ minKm: config.minKm, maxKm: config.maxKm });
-    const questions = planDistanceQuestions(municipalityPool(index, config.prefCodes), config.questionCount, range, rng);
+    const questions = planDistanceQuestions(
+      municipalityPool(index, config.prefCodes),
+      offices,
+      config.questionCount,
+      range,
+      rng,
+    );
     if (questions.length === 0) return renderSetup();
     session = { questions, results: [], maxKm: range.maxKm };
     nextQuestion();
@@ -165,9 +191,9 @@ export function createDistanceGame(root: HTMLElement, index: DatasetIndex, map: 
     resetMap();
     current = question;
     answering = true;
-    map.addMarker(question.origin.center, MARKER_COLORS.origin);
+    map.addMarker(question.point, MARKER_COLORS.origin);
     // 画面の広さが答えのヒントにならないよう、距離にかかわらず最大値の円が入る範囲を映す
-    map.fitBBox(boundsAround(question.origin.center, session.maxKm * 1.1));
+    map.fitBBox(boundsAround(question.point, session.maxKm * 1.1));
     renderQuestion();
   }
 
@@ -194,7 +220,7 @@ export function createDistanceGame(root: HTMLElement, index: DatasetIndex, map: 
         "section",
         { class: "quiz" },
         progress(),
-        h("p", { class: "prompt" }, `${placeName(q.origin.code, q.origin.name)} の代表点（黒い印）から`),
+        h("p", { class: "prompt" }, `${placeName(q.origin.code, q.origin.name)} の庁舎（黒い印）から`),
         h("p", { class: "distance-target" }, `直線で ${q.targetKm} km`),
         h("p", { class: "hint" }, "の地点はどこ？"),
         status,
@@ -208,7 +234,7 @@ export function createDistanceGame(root: HTMLElement, index: DatasetIndex, map: 
     const s = session;
     if (!q || !s || !answering || !pick) return;
     answering = false;
-    const m = measure(q.origin.center, pick, q.targetKm);
+    const m = measure(q.point, pick, q.targetKm);
     s.results.push({ question: q, measurement: m });
 
     // 起点 → 選んだ位置（大円に沿う線）。届いていなければ、同じ向きに延ばした先が正解の距離の地点
@@ -322,6 +348,7 @@ export function createDistanceGame(root: HTMLElement, index: DatasetIndex, map: 
       current = null;
       answering = false;
       onPick = null;
+      setupToken++;
       map.setQuizMode(false);
       root.replaceChildren();
     },

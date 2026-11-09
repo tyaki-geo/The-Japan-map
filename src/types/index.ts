@@ -66,3 +66,6 @@ export type TownProps = { kind: "area"; name: string; count: number } | { kind: 
 
 /** towns-index.json: 市区町村コード -> その市区町村の町・大字名 */
 export type TownsIndex = Record<string, string[]>;
+
+/** offices.json: 市区町村コード -> 庁舎の位置 [経度, 緯度]。庁舎の無い市区町村（北方領土の村など）は含まれない */
+export type OfficesIndex = Record<string, [number, number]>;

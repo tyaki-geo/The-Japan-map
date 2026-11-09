@@ -8,6 +8,7 @@ import {
   judgeDistance,
   measure,
   pickTargetKm,
+  originPool,
   planDistanceQuestions,
 } from "../src/lib/distance";
 import { createRng } from "../src/lib/quiz";
@@ -44,8 +45,23 @@ describe("pickTargetKm", () => {
 
 describe("planDistanceQuestions", () => {
   const pool = ["a", "b", "c", "d"].map(muni);
+  const offices = Object.fromEntries(pool.map((m, i) => [m.code, [130 + i, 33] as [number, number]]));
+
+  it("庁舎の無い市区町村は起点にしない", () => {
+    const { a: _a, ...withoutA } = offices;
+    expect(originPool(pool, withoutA).map((m) => m.code)).toEqual(["b", "c", "d"]);
+    const qs = planDistanceQuestions(pool, withoutA, 10, { minKm: 1, maxKm: 10 }, createRng(3));
+    expect(qs.map((q) => q.origin.code).sort()).toEqual(["b", "c", "d"]);
+  });
+
+  it("起点の位置は庁舎", () => {
+    for (const q of planDistanceQuestions(pool, offices, 4, { minKm: 1, maxKm: 10 }, createRng(5))) {
+      expect(q.point).toEqual(offices[q.origin.code]);
+    }
+  });
+
   it("起点は重複せず、距離は範囲内", () => {
-    const qs = planDistanceQuestions(pool, 3, { minKm: 2, maxKm: 12 }, createRng(7));
+    const qs = planDistanceQuestions(pool, offices, 3, { minKm: 2, maxKm: 12 }, createRng(7));
     expect(qs).toHaveLength(3);
     expect(new Set(qs.map((q) => q.origin.code)).size).toBe(3);
     for (const q of qs) {
@@ -56,9 +72,9 @@ describe("planDistanceQuestions", () => {
   });
 
   it("起点が足りなければ出せる分だけ、0以下なら空", () => {
-    expect(planDistanceQuestions(pool, 10, { minKm: 1, maxKm: 10 }, createRng(1))).toHaveLength(4);
-    expect(planDistanceQuestions(pool, 0, { minKm: 1, maxKm: 10 }, createRng(1))).toEqual([]);
-    expect(planDistanceQuestions([], 5, { minKm: 1, maxKm: 10 }, createRng(1))).toEqual([]);
+    expect(planDistanceQuestions(pool, offices, 10, { minKm: 1, maxKm: 10 }, createRng(1))).toHaveLength(4);
+    expect(planDistanceQuestions(pool, offices, 0, { minKm: 1, maxKm: 10 }, createRng(1))).toEqual([]);
+    expect(planDistanceQuestions([], offices, 5, { minKm: 1, maxKm: 10 }, createRng(1))).toEqual([]);
   });
 });
 

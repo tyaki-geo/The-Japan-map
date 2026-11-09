@@ -1,0 +1,7 @@
+{
+  "43101": {"name": "熊本市中央区役所", "lon": 130.7079132, "lat": 32.8030736, "source": "OpenStreetMap"},
+  "43102": {"name": "熊本市東区役所", "lon": 130.7680908, "lat": 32.7805178, "source": "OpenStreetMap"},
+  "43103": {"name": "熊本市西区役所", "lon": 130.6476048, "lat": 32.7776706, "source": "OpenStreetMap"},
+  "43104": {"name": "熊本市南区役所", "lon": 130.6785651, "lat": 32.7157969, "source": "OpenStreetMap"},
+  "43105": {"name": "熊本市北区役所", "lon": 130.6944041, "lat": 32.9036057, "source": "OpenStreetMap"}
+}

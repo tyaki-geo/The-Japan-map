@@ -32,6 +32,8 @@ cargo clippy --manifest-path data/converter/Cargo.toml --all-targets -- -D warni
   - `src/towns.rs` 町・大字の区域づくりと名前の決め方
   - `src/simplify.rs` 境界を共有したままの簡略化
   - `src/output.rs` GeoJSON / index.json の書き出し
+- `scripts/` 開発用スクリプト（`sync-data.ts`: data/edited を public/data へ、`build-offices.ts` / `offices.ts`: 庁舎の位置 offices.json を作る）
+- `data/sources/` 外部データを写したもの（変換コードの入力の `data/raw` とは別）。`data/README.md` を参照
 - `src/types/index.ts` data/edited の型（アプリ側）。変換コードの出力と一致させる
 - `src/main.ts` モードの切り替え（勉強モード / 市区町村当て / 地名当て / ミックス / 距離感覚）
 - `src/map.ts` MapLibre の地図とレイヤ。クイズ中はラベル・名前のホバー表示を隠し、クリックを回答として渡す
@@ -128,7 +130,9 @@ cargo clippy --manifest-path data/converter/Cargo.toml --all-targets -- -D warni
 ### 距離感覚モード
 
 - 目的は「どこどこまで ○km」の感覚を鍛えること。実際は道路の長さだが、**直線距離**で出題する（Issue #11 の方針）
-- 起点は市区町村の代表点（`index.json` の `center`、区域の内側の点）で、地図に黒い印で出す。**庁舎の位置ではない**。基盤地図情報（05 行政区画）の `AdmPt` は庁舎でなく名前の表示位置で、1つの市区町村に最大30点ほどあるため使えない。庁舎の座標が手に入ったら `src/distance.ts` の起点（`question.origin.center`）を差し替える
+- 起点は市区町村の庁舎（本庁）で、地図に黒い印で出す。位置は `offices.json`（`npm run data:offices` で `data/sources/` から作る。作り方は `data/README.md`）。庁舎の無い市区町村（北方領土の村と所属未定地）は出題しない
+  - 基盤地図情報の `AdmPt` は庁舎の位置ではなく名前の表示位置（1つの市区町村に最大30点ほど）なので使わない
+  - 庁舎の出どころは国土数値情報 P05-10（2010年）。その後に庁舎が移った市区町村は古い位置のまま
 - 出題範囲は都道府県で選ぶ。問題数は 1〜30 問（初期値 10）。起点の市区町村は重複しない
 - 出題する距離は、最小値（1〜5km）・最大値（10〜50km）をスライダーで選び、その範囲の整数 km から1問ごとにランダムに決める（初期値は 1km〜20km）
 - 起点を中心に、最大値の円が入る範囲を映す（距離のヒントにならないよう、問題ごとの距離では変えない）。地図は海の上などどこでもクリックでき、測定前なら選び直せる

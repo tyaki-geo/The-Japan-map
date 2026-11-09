@@ -1,9 +1,9 @@
 // 距離感覚のクイズの出題ロジック（DOM・地図に依存しない部分）
 //
-// 市区町村の代表点を起点に「ここから直線で ○km の地点」を地図でクリックして答える。
+// 市区町村の庁舎を起点に「ここから直線で ○km の地点」を地図でクリックして答える。
 // 実際の道のりは直線より長いので、直線距離で鍛えるのは「どこどこまで ○km」の感覚のうち地図上の目安になる部分。
-// 起点は今のところ区域の内側の代表点（index.json の center）。庁舎の位置が手に入れば origin だけ差し替えればよい
-import type { MunicipalityEntry } from "../types";
+// 庁舎の位置は offices.json（data/edited、scripts/build-offices.ts で作る）。庁舎の無い市区町村は出題しない
+import type { MunicipalityEntry, OfficesIndex } from "../types";
 import { bearingDeg, destinationPoint, distanceKm, type LngLat } from "./geo";
 import { randomInt, shuffle, type Rng } from "./quiz";
 
@@ -33,6 +33,8 @@ export function clampRange(r: DistanceRange): DistanceRange {
 
 export interface DistanceQuestion {
   origin: MunicipalityEntry;
+  /** 起点の位置 [経度, 緯度]（origin の庁舎） */
+  point: [number, number];
   /** 起点からの直線距離 [km]（整数） */
   targetKm: number;
 }
@@ -43,16 +45,22 @@ export function pickTargetKm(range: DistanceRange, rng: Rng): number {
   return minKm + randomInt(rng, maxKm - minKm + 1);
 }
 
+/** 起点にできる市区町村（庁舎の位置がある） */
+export function originPool(pool: readonly MunicipalityEntry[], offices: OfficesIndex): MunicipalityEntry[] {
+  return pool.filter((m) => offices[m.code] !== undefined);
+}
+
 /** 起点の市区町村を重複なく選び、それぞれに距離を決める。起点の数が足りなければ出せる分だけ */
 export function planDistanceQuestions(
   pool: readonly MunicipalityEntry[],
+  offices: OfficesIndex,
   count: number,
   range: DistanceRange,
   rng: Rng,
 ): DistanceQuestion[] {
-  return shuffle(pool, rng)
+  return shuffle(originPool(pool, offices), rng)
     .slice(0, Math.max(0, count))
-    .map((origin) => ({ origin, targetKm: pickTargetKm(range, rng) }));
+    .map((origin) => ({ origin, point: offices[origin.code]!, targetKm: pickTargetKm(range, rng) }));
 }
 
 // ---- 採点 ----
