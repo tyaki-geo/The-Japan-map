@@ -29,6 +29,7 @@
 ```
 edited/
 ├── index.json                 都道府県 → 市区町村の一覧（名称・コード・範囲・面積など）
+├── area-codes.json            市外局番（0 を含む。例 "0155"）→ その区域に入る市区町村コード（市外局番クイズ。`npm run data:area-codes` で作る）
 ├── offices.json               市区町村コード → 庁舎の位置 [経度, 緯度]（距離感覚モードの起点。`npm run data:offices` で作る）
 ├── towns-index.json           市区町村コード → 町・大字名の一覧（クイズで同じ名前の地名を探すのに使う）
 ├── prefectures.geojson        都道府県（全体表示用に簡略化）
@@ -65,12 +66,17 @@ edited/
 
 ## sources: 外部データ（変換コードを通さず、スクリプトで edited に取り込むもの）
 
-`sources/` のファイルは出どころごとに写したもの。`npm run data:process` のあとに `npm run data:offices` で `edited/offices.json` を作る（`scripts/build-offices.ts`）。
+`sources/` のファイルは出どころごとに写したもの。`npm run data:process` のあとに、`npm run data:offices`（`edited/offices.json`、`scripts/build-offices.ts`）と `npm run data:area-codes`（`edited/area-codes.json`、`scripts/build-area-codes.ts`）で作る。
 
 | ファイル | 内容 | 出どころ |
 | --- | --- | --- |
 | `sources/offices-p05.json` | 市町村役場（施設分類が「本庁」）の位置 | 国土数値情報「市町村役場等及び公的集会施設」P05-10（2010年）。国土交通省。**商用利用不可**（出どころの有償刊行物の条件） |
 | `sources/offices-extra.json` | P05 に無い区（熊本市の5区）の区役所の位置 | © OpenStreetMap contributors（ODbL） |
+| `sources/area-codes.tsv` | 市外局番ごとの区域（番号区画コード / 市外局番 / 市内局番の区分 / 区域の文章）582区画 | 総務省「市外局番の一覧」（令和8年3月1日現在、https://www.soumu.go.jp/main_content/000141817.pdf）の表を写したもの。PDF の改行を直し、区画ごとに1行にした |
+| `sources/districts-n03.json` | 郡に属する町村（923）の郡名 | 国土数値情報「行政区域」N03（令和8年1月1日、国土交通省）の郡名 |
 
 - P05 は2010年のデータなので、その後に市になった町村（滝沢・富谷・白岡・大網白里・野々市・長久手・那珂川）と浜松市の新しい区は、旧コードの庁舎を引き継ぐ（`scripts/offices.ts` の `SUCCESSORS`）
 - 庁舎が決まらない市区町村（北方領土の村、所属未定地）は `offices.json` に含めない
+- 市外局番は先頭の 0 を足した形で持つ（PDF の「155」は 0155）。同じ市外局番の区画（番号区画）は1つにまとめる（387種）
+- 区域に入る市区町村は、町字の一部だけが入る場合も含める。当てはまらない項目があるとスクリプトは止まる
+- 市内局番に対応する電話局の位置のデータは見つかっていない

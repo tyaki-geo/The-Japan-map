@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "data:process": "cargo run --release --manifest-path data/converter/Cargo.toml --",
+    "data:area-codes": "tsx scripts/build-area-codes.ts",
     "data:offices": "tsx scripts/build-offices.ts",
     "data:sync": "tsx scripts/sync-data.ts"
   },
