@@ -4,11 +4,12 @@ import { h } from "./lib/dom";
 import type { QuizKind } from "./lib/quiz";
 import { findMunicipality } from "./lib/search";
 import { createAreaCodeGame } from "./areacode";
+import { createDistanceGame } from "./distance";
 import { createGame } from "./game";
 import { createMap } from "./map";
 import { createSidebar } from "./sidebar";
 
-type Mode = "study" | QuizKind | "areacode";
+type Mode = "study" | QuizKind | "areacode" | "distance";
 
 const MODES: { mode: Mode; label: string }[] = [
   { mode: "study", label: "勉強モード" },
@@ -16,6 +17,7 @@ const MODES: { mode: Mode; label: string }[] = [
   { mode: "town", label: "地名当て" },
   { mode: "mixed", label: "ミックス" },
   { mode: "areacode", label: "市外局番" },
+  { mode: "distance", label: "距離感覚" },
 ];
 
 async function main(app: HTMLElement) {
@@ -62,6 +64,7 @@ async function main(app: HTMLElement) {
   });
   const game = createGame(quizEl, index, map);
   const areaCodeGame = createAreaCodeGame(quizEl, index, map);
+  const distanceGame = createDistanceGame(quizEl, index, map);
   // 開発時だけ、ブラウザのコンソールや自動テストから地図を操作できるようにする
   if (import.meta.env.DEV) Object.assign(window, { __japanMap: map.map });
 
@@ -88,8 +91,10 @@ async function main(app: HTMLElement) {
     for (const btn of tabButtons) btn.classList.toggle("active", btn.dataset.mode === next);
     studyEl.hidden = next !== "study";
     quizEl.hidden = next === "study";
+    // クイズは同じ領域に描くので、切り替えるたびにいったん両方を片付ける
+    game.hide();
+    distanceGame.hide();
     if (next === "study") {
-      game.hide();
       document.title = "The Japan Map";
       // 勉強モードに戻ったらハッシュの選択を復元する
       current = null;
@@ -97,6 +102,7 @@ async function main(app: HTMLElement) {
     } else {
       document.title = `${MODES.find((m) => m.mode === next)!.label} - The Japan Map`;
       if (next === "areacode") areaCodeGame.show();
+      else if (next === "distance") distanceGame.show();
       else game.show(next);
     }
   }

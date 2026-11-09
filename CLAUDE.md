@@ -32,8 +32,10 @@ cargo clippy --manifest-path data/converter/Cargo.toml --all-targets -- -D warni
   - `src/towns.rs` 町・大字の区域づくりと名前の決め方
   - `src/simplify.rs` 境界を共有したままの簡略化
   - `src/output.rs` GeoJSON / index.json の書き出し
+- `scripts/` 開発用スクリプト（`sync-data.ts`: data/edited を public/data へ、`build-offices.ts` / `offices.ts`: 庁舎の位置 offices.json を作る、`build-area-codes.ts` / `areacode.ts`: 市外局番の区域 area-codes.json を作る）
+- `data/sources/` 外部データを写したもの（変換コードの入力の `data/raw` とは別）。`data/README.md` を参照
 - `src/types/index.ts` data/edited の型（アプリ側）。変換コードの出力と一致させる
-- `src/main.ts` モードの切り替え（勉強モード / 市区町村当て / 地名当て / ミックス / 市外局番）
+- `src/main.ts` モードの切り替え（勉強モード / 市区町村当て / 地名当て / ミックス / 市外局番 / 距離感覚）
 - `src/map.ts` MapLibre の地図とレイヤ。クイズ中はラベル・名前のホバー表示を隠し、クリックを回答として渡す
 - `src/scope.ts` 出題範囲（都道府県・地方）の選択。クイズの各モードで共通
 - `src/sidebar.ts` 勉強モード（一覧・検索・情報パネル・レイヤ）
@@ -43,8 +45,9 @@ cargo clippy --manifest-path data/converter/Cargo.toml --all-targets -- -D warni
   - `src/lib/perspective.ts` 看板を横から見たときの透視投影（画面の列ごとに、看板のどの列が何倍で映るか）
 - `src/areacode.ts` 市外局番モード（設定・出題・答え合わせ・結果）
   - `src/lib/areacode.ts` 出題ロジック（出題範囲に入る市外局番、出題の選び方）
-- `scripts/` 開発用スクリプト（`sync-data.ts`: data/edited を public/data へ、`build-area-codes.ts` / `areacode.ts`: 市外局番の区域 area-codes.json を作る）
-- `data/sources/` 外部データを写したもの（変換コードの入力の `data/raw` とは別）。`data/README.md` を参照
+- `src/distance.ts` 距離感覚モード（設定・出題・測定・結果）
+  - `src/lib/distance.ts` 出題と採点のロジック（距離の範囲、誤差のレベル、測定）。DOM に依存しない
+  - `src/lib/geo.ts` 2点間の距離・方位、進んだ先の地点、大円の線
 - 出力形式の詳細は `data/README.md`
 
 ## 入力データ
@@ -135,6 +138,20 @@ cargo clippy --manifest-path data/converter/Cargo.toml --all-targets -- -D warni
   - 表記ゆれ（ヶとケ）と改称（篠山市 → 丹波篠山市）は `normalizeArea` で直す。区域の項目が現在の市区町村に当てはまらないと、スクリプトは書き出さずに止まる（コードが変わったら `data/sources/` を更新する）
 - 出題範囲の都道府県に1つでも入る市外局番を出す（範囲外の市区町村も正解に含まれる）。問題数は 1〜50 問（初期値 10）
 - **市内局番（電話局の位置）は出題しない**。位置を紐づけたデータが見つかっていない（Issue #9 のコメントのとおり）
+
+### 距離感覚モード
+
+- 目的は「どこどこまで ○km」の感覚を鍛えること。実際は道路の長さだが、**直線距離**で出題する（Issue #11 の方針）
+- 起点は市区町村の庁舎（本庁）で、地図に黒い印で出す。位置は `offices.json`（`npm run data:offices` で `data/sources/` から作る。作り方は `data/README.md`）。庁舎の無い市区町村（北方領土の村と所属未定地）は出題しない
+  - 基盤地図情報の `AdmPt` は庁舎の位置ではなく名前の表示位置（1つの市区町村に最大30点ほど）なので使わない
+  - 庁舎の出どころは国土数値情報 P05-10（2010年）。その後に庁舎が移った市区町村は古い位置のまま
+- 出題範囲は都道府県で選ぶ。問題数は 1〜30 問（初期値 10）。起点の市区町村は重複しない
+- 出題する距離は、最小値（1〜5km）・最大値（10〜50km）をスライダーで選び、その範囲の整数 km から1問ごとにランダムに決める（初期値は 1km〜20km）
+- 起点を中心に、最大値の円が入る範囲を映す（距離のヒントにならないよう、問題ごとの距離では変えない）。地図は海の上などどこでもクリックでき、測定前なら選び直せる
+- 「測定する」で、起点と選んだ位置を大円（地球の丸みに沿う線）で結び、距離・誤差・誤差のレベルを出す。線のどこが正しい距離かを緑の印で示す
+  - 選んだ位置が近すぎたときは、同じ向きに線を延ばした点線の先が正解の地点
+  - 誤差のレベルは、正解の距離に対する誤差の割合で S（3%以内）/ A（10%）/ B（20%）/ C（40%）/ D（それ以上）
+- 結果は問題ごとの誤差と、平均誤差（誤差の割合の平均）
 
 ### 開発時の補助
 

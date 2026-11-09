@@ -69,3 +69,6 @@ export type TownsIndex = Record<string, string[]>;
 
 /** area-codes.json: 市外局番（先頭の 0 を含む。例: "0155"）-> その区域に入る市区町村コード。一部だけ入る市区町村も含む */
 export type AreaCodesIndex = Record<string, string[]>;
+
+/** offices.json: 市区町村コード -> 庁舎の位置 [経度, 緯度]。庁舎の無い市区町村（北方領土の村など）は含まれない */
+export type OfficesIndex = Record<string, [number, number]>;
