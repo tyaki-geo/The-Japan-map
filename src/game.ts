@@ -12,7 +12,6 @@ import {
   VIEW_ANGLE_MAX,
   VIEW_ANGLE_STEP,
   DEFAULT_QUESTION_PERCENT,
-  REGIONS,
   answerCodes,
   clampQuestionCount,
   clueMatches,
@@ -24,7 +23,6 @@ import {
   questionCountFromPercent,
   questionNames,
   signedViewAngle,
-  toggleRegion,
   usesViewAngle,
   type Clue,
   type Mark,
@@ -37,6 +35,7 @@ import {
 } from "./lib/quiz";
 import { findMunicipality } from "./lib/search";
 import { QUIZ_MARK_COLORS, type JapanMap, type QuizAnswer } from "./map";
+import { createScopePicker } from "./scope";
 import type { BBox, DatasetIndex, MunicipalityEntry, TownProps, TownsIndex } from "./types";
 
 const KIND_INFO: Record<QuizKind, { title: string; description: string }> = {
@@ -196,57 +195,12 @@ export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap
     const info = KIND_INFO[config.kind];
 
     // 出題範囲（都道府県を複数選べる）
-    const selected = new Set(config.prefCodes);
-    const scopeSummary = h("span", { class: "hint" });
-    const checkboxes = index.prefectures.map((p) => {
-      const cb = h("input", { type: "checkbox", value: p.code });
-      cb.checked = selected.has(p.code);
-      cb.addEventListener("change", () => {
-        if (cb.checked) selected.add(p.code);
-        else selected.delete(p.code);
-        applyScope();
-      });
-      return { cb, label: h("label", {}, cb, p.name) };
+    const scopePicker = createScopePicker(index, config.prefCodes, (codes) => {
+      config.prefCodes = codes;
+      fitScope();
+      void updateAvailability();
     });
-    const syncCheckboxes = () => {
-      for (const { cb } of checkboxes) cb.checked = selected.has(cb.value);
-      applyScope();
-    };
-    const setAll = (on: boolean) => {
-      selected.clear();
-      if (on) index.prefectures.forEach((p) => selected.add(p.code));
-      syncCheckboxes();
-    };
-    // 地方ごとにまとめて選ぶ（すべて選ばれていれば外す）
-    const regionButtons = REGIONS.map((r) => {
-      const btn = h("button", { type: "button", class: "small region", "aria-pressed": "false" }, r.name);
-      btn.addEventListener("click", () => {
-        const next = toggleRegion(selected, r.prefCodes);
-        selected.clear();
-        next.forEach((c) => selected.add(c));
-        syncCheckboxes();
-      });
-      return { btn, region: r };
-    });
-    const updateRegionButtons = () => {
-      for (const { btn, region } of regionButtons) {
-        const all = region.prefCodes.every((c) => selected.has(c));
-        btn.classList.toggle("active", all);
-        btn.setAttribute("aria-pressed", String(all));
-      }
-    };
-    const allBtn = h("button", { type: "button", class: "small" }, "全国");
-    allBtn.addEventListener("click", () => setAll(true));
-    const noneBtn = h("button", { type: "button", class: "small" }, "すべて解除");
-    noneBtn.addEventListener("click", () => setAll(false));
-    const scope = h(
-      "fieldset",
-      { class: "options scope" },
-      h("legend", {}, "出題範囲"),
-      h("div", { class: "scope-actions" }, allBtn, noneBtn, scopeSummary),
-      h("div", { class: "regions" }, ...regionButtons.map((r) => r.btn)),
-      h("div", { class: "pref-grid" }, ...checkboxes.map((c) => c.label)),
-    );
+    const scope = scopePicker.element;
 
     // 問題数: 出題できる地名に対する割合をスライダーで決める。数字をクリックすると手入力できる
     let total = 0;
@@ -386,13 +340,6 @@ export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap
 
     // 出題できる地名の数（町・大字は一覧を読み込んでから数える）
     let availabilityToken = 0;
-    function applyScope() {
-      config.prefCodes = index.prefectures.map((p) => p.code).filter((c) => selected.has(c));
-      scopeSummary.textContent = `${config.prefCodes.length} / ${index.prefectures.length} 都道府県`;
-      updateRegionButtons();
-      fitScope();
-      void updateAvailability();
-    }
     async function updateAvailability() {
       const token = ++availabilityToken;
       const munis = municipalityPool(index, config.prefCodes);
@@ -440,7 +387,7 @@ export function createGame(root: HTMLElement, index: DatasetIndex, map: JapanMap
         start,
       ),
     );
-    applyScope();
+    scopePicker.refresh();
   }
 
   // ---- 出題 ----
